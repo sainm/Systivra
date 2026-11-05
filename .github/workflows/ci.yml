@@ -1,0 +1,105 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: systivra
+          POSTGRES_USER: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: fmt
+        run: cargo fmt --all --check
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: test
+        run: cargo test --workspace
+
+      # DDL は「空 DB に適用できる」だけでは足りない。
+      # RLS / 権限 / 分区 / ジョブ取り出しまで確認する（detail/05 §5.1）。
+      - name: db verification
+        env:
+          PGHOST: localhost
+          PGPORT: "5432"
+          PGUSER: postgres
+        run: ./scripts/verify-db.sh
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 日本語正本に簡体字が混ざる事故が 3 回起きた。目視では捕まらないので機械で見る。
+      # CP932 で符号化できない文字は日本語正本に存在し得ない。
+      - name: no simplified chinese in ja docs
+        run: |
+          python3 - <<'PY'
+          import glob, sys
+          allow = set("—‐〜≥≤↔▶◀·¥▾▸⚠☑⌘↵█✔✘◐→←↑↓×÷≠≒∞①②③④⑤⑥⑦⑧⑨⑩")
+          bad = []
+          for p in glob.glob("docs/design/ja/**/*.md", recursive=True):
+              for i, ch in enumerate(open(p, encoding="utf-8").read()):
+                  if ord(ch) < 128 or ch in allow:
+                      continue
+                  try:
+                      ch.encode("cp932")
+                  except UnicodeEncodeError:
+                      bad.append(f"{p}: {ch!r} U+{ord(ch):04X}")
+          if bad:
+              print("\n".join(bad[:50]))
+              print(f"non-japanese characters: {len(bad)}")
+              sys.exit(1)
+          print("ok")
+          PY
+
+      # 表の列数がずれると GitHub では崩れるが、エディタでは気づかない。
+      - name: markdown table sanity
+        run: |
+          python3 - <<'PY'
+          import glob, re, sys
+          issues = []
+          for p in glob.glob("docs/design/ja/**/*.md", recursive=True):
+              lines = open(p, encoding="utf-8").read().split("\n")
+              fence = False
+              for i, l in enumerate(lines):
+                  if l.strip().startswith("```"):
+                      fence = not fence
+                      continue
+                  if fence:
+                      continue
+                  if re.fullmatch(r"\|[\s:\-\|]+\|", l.strip()) and i > 0 and lines[i-1].strip().startswith("|"):
+                      if lines[i-1].count("|") != l.count("|"):
+                          issues.append(f"{p}:{i+1}")
+          if issues:
+              print("\n".join(issues[:30]))
+              sys.exit(1)
+          print("ok")
+          PY

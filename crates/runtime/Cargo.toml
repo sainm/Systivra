@@ -1,0 +1,22 @@
+[package]
+name = "runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Capability ゲートウェイ、Agent、Workflow、MCP。"
+
+[dependencies]
+domain.workspace = true
+contracts.workspace = true
+providers.workspace = true
+engine-rag.workspace = true
+engine-graph.workspace = true
+engine-code.workspace = true
+engine-impact.workspace = true
+engine-test.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true

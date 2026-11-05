@@ -1,0 +1,17 @@
+[package]
+name = "engine-test"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "ルール目録、Scenario / Case / Data、被覆定義。"
+
+[dependencies]
+domain.workspace = true
+contracts.workspace = true
+store.workspace = true
+providers.workspace = true
+engine-code.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

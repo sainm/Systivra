@@ -1,0 +1,63 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/domain",
+  "crates/contracts",
+  "crates/store",
+  "crates/providers",
+  "crates/engine-rag",
+  "crates/engine-graph",
+  "crates/engine-code",
+  "crates/engine-impact",
+  "crates/engine-test",
+  "crates/runtime",
+  "crates/app",
+  "crates/api",
+  "crates/worker",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.83"
+publish = false
+
+[workspace.dependencies]
+# ── 内部 crate（依存の向きは 02-アーキテクチャ §3 の表に従う）──
+domain = { path = "crates/domain" }
+contracts = { path = "crates/contracts" }
+store = { path = "crates/store" }
+providers = { path = "crates/providers" }
+engine-rag = { path = "crates/engine-rag" }
+engine-graph = { path = "crates/engine-graph" }
+engine-code = { path = "crates/engine-code" }
+engine-impact = { path = "crates/engine-impact" }
+engine-test = { path = "crates/engine-test" }
+runtime = { path = "crates/runtime" }
+app = { path = "crates/app" }
+
+# ── 外部 ──
+async-trait = "0.1"
+axum = "0.8"
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = [
+  "runtime-tokio-rustls", "postgres", "uuid", "chrono", "json", "migrate",
+] }
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net", "time"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "request-id", "limit"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+http-body-util = "0.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+# 開発時のビルドを軽くする。依存 crate は最適化しない。
+[profile.dev.package."*"]
+opt-level = 1

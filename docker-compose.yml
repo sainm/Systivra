@@ -1,0 +1,56 @@
+# 開発用の最小構成。`docker compose up` で /healthz が 200 になること（P1-ENV-01 の DoD）。
+#
+# 注意: 認証は trust。ローカル専用。本番は絶対にこのファイルを使わない。
+
+services:
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: systivra
+      POSTGRES_USER: postgres
+      POSTGRES_HOST_AUTH_METHOD: trust
+      # 日本語照合順序。PDF の本文を LIKE で探すときに効く。
+      LANG: ja_JP.UTF-8
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # 初回起動時だけ流れる。順序はファイル名順なので接頭辞で制御する。
+      - ./deployment/postgres/roles.sql:/docker-entrypoint-initdb.d/00_roles.sql:ro
+      - ./migrations/001_core.sql:/docker-entrypoint-initdb.d/10_001_core.sql:ro
+      - ./migrations/002_core_ops.sql:/docker-entrypoint-initdb.d/11_002_core_ops.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d systivra"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: deployment/docker/Dockerfile
+    environment:
+      DATABASE_URL: postgres://systivra_app@db:5432/systivra
+      RUST_LOG: info,systivra_api=debug
+      PORT: "8080"
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: deployment/docker/Dockerfile
+    # worker は別ロールで動かす（detail/02 §0.1）。API と同じロールにしない。
+    command: ["systivra-worker"]
+    environment:
+      DATABASE_URL: postgres://systivra_scheduler@db:5432/systivra
+      RUST_LOG: info
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

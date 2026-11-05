@@ -1,0 +1,16 @@
+[package]
+name = "engine-code"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "スキャン編成、Fact 正規化、増分。"
+
+[dependencies]
+domain.workspace = true
+contracts.workspace = true
+store.workspace = true
+providers.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

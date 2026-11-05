@@ -1,0 +1,6 @@
+[toolchain]
+# 正本の前提は Rust stable。版を固定しないのは、CI と開発機で
+# 同じ minor を使う必要が無いため（workspace の rust-version = 1.83 が下限）。
+channel = "stable"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

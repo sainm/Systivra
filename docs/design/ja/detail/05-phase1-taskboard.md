@@ -78,6 +78,16 @@ P1-ENV-01 Cargo workspace / compose / CI
       └────────────────────────────> P1-QA-01 統合テスト / 受入 / 降格判断
 ```
 
+**進捗（2026-11-05）**
+
+| ID | 状態 | 実測 |
+|---|---|---|
+| `P1-ENV-01` | **完了** | 13 crate が `cargo check` / `clippy -D warnings` / `fmt --check` 緑。`cargo test --workspace` 23 passed。`/healthz` 200、`/readyz` は DB 生存で 200・停止で 503。`compose` は未検証（開発機に Docker が無い） |
+| `P1-DB-01` | **完了** | `001` / `002` / `roles.sql` を実 DB に適用。`scripts/verify-db.sh` の 9 項目が緑 |
+| その他 | 未着手 | — |
+
+> **依存の境界は Cargo.toml で機械的に効く。** `api` の `Cargo.toml` に `store` を入れていないので、HTTP 層から SQL を書こうとするとコンパイルで落ちる。「規約で守る」より確実。
+
 **並列可能な境界**：
 
 - BE-1 が `DB / API / JOB`、BE-2 が `PARSE / RAG / EVID` を W1 から並走できる。境目は `detail/04-api-contract.md` の DTO と `contracts/` の JSON Schema で固定する。

@@ -1,0 +1,17 @@
+[package]
+name = "engine-impact"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "シード解決、階層走査、リスク評価。"
+
+[dependencies]
+domain.workspace = true
+contracts.workspace = true
+store.workspace = true
+engine-graph.workspace = true
+engine-rag.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
