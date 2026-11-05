@@ -17,20 +17,33 @@ Phase 0（設計）完了。Phase 1 の **骨格（`P1-ENV-01`）と SQL 層（`
 
 - 13 crate の Cargo workspace。依存の向きは `02-アーキテクチャ` §3 の表に固定
 - `systivra-api` … `/healthz`（DB 非依存）/ `/readyz`（DB 依存）、`X-Trace-Id` の付与と伝播
+- 認証 … ログイン / ログアウト / `/me` / `/projects/{pid}/me`。セッション Cookie（HMAC 署名）と PAT の両対応
+- 認可 … `06-API.md` §4.1 の権限マトリクスを `domain::Permission` に 1 箇所だけ実装。非所属プロジェクトは 404
 - `systivra-worker` … 起動と graceful shutdown の骨格
-- マイグレーション 001 / 002、3 ロール、RLS、監査ログの月次分区
-- 23 テスト、`clippy -D warnings`、`cargo fmt --check` が緑
+- マイグレーション 001〜003、3 ロール、RLS、監査ログの月次分区
+- 50 テスト、`clippy -D warnings`、`cargo fmt --check` が緑
 
 ```bash
 cargo test --workspace
 
-# マイグレーションの検証（一時 DB を作って 9 項目を確認し、最後に消す）
+# マイグレーションの検証（一時 DB を作って 10 項目を確認し、最後に消す）
 PGHOST=localhost PGUSER=postgres ./scripts/verify-db.sh
 
+# 初期アカウント用のパスワードハッシュ
+cargo run -p app --example hash_password -- 'your-password'
+
 # API を起動して確認
-PORT=8080 DATABASE_URL=postgres://systivra_app@localhost:5432/systivra cargo run --bin systivra-api
+cp .env.example .env    # SESSION_SECRET を埋める（openssl rand -hex 32）
+PORT=8080 DATABASE_URL=postgres://systivra_app@localhost:5432/systivra \
+SESSION_SECRET=$(openssl rand -hex 32) SESSION_COOKIE_SECURE=false \
+  cargo run --bin systivra-api
+
 curl -i localhost:8080/healthz   # 200
 curl -i localhost:8080/readyz    # DB が生きていれば 200、落ちていれば 503
+
+curl -i -X POST localhost:8080/api/v1/auth/login \
+  -H 'content-type: application/json' \
+  -d '{"login_id":"alice","password":"..."}'
 ```
 
 ## 構成
@@ -39,7 +52,7 @@ curl -i localhost:8080/readyz    # DB が生きていれば 200、落ちてい�
 crates/                    13 crate（domain / contracts / store / providers /
                            engine-rag / engine-graph / engine-code / engine-impact /
                            engine-test / runtime / app / api / worker）
-migrations/                001_core / 002_core_ops
+migrations/                001_core / 002_core_ops / 003_authz
 deployment/postgres/       roles.sql（3 ロール + 権限。冪等）
 deployment/docker/         Dockerfile
 docker-compose.yml         db + api + worker

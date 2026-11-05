@@ -8,6 +8,8 @@
 //! **0 行になる**（エラーにならない）。そのため `begin_scoped` 以外で
 //! 業務クエリを書かない。
 
+pub mod auth;
 pub mod pool;
 
-pub use pool::{Store, StoreError, Tx};
+pub use auth::{MembershipRow, TokenRow, UserRow};
+pub use pool::{commit, Store, StoreError, Tx};

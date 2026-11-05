@@ -6,6 +6,7 @@
 use app::App;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use chrono::Duration;
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
@@ -14,7 +15,12 @@ fn app_with_unreachable_db() -> axum::Router {
     // `store` は api の依存に無い（境界）。だから組み立ては app に任せる。
     let app = App::from_database_url("postgres://nobody@127.0.0.1:1/none")
         .expect("lazy 接続のプールは作れるはず");
-    api::router(app)
+    let session = api::auth::SessionConfig::new(
+        b"0123456789abcdef0123456789abcdef".to_vec(),
+        Duration::hours(1),
+        false,
+    );
+    api::router(app, session)
 }
 
 #[tokio::test]

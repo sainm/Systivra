@@ -14,7 +14,7 @@
 //! Agent が見るのは `ctx.project` という不透明参照だけ。
 
 use contracts::ErrorCode;
-use domain::{ProjectId, Role, UserId};
+use domain::{Permission, ProjectId, Role, UserId};
 use serde::{Deserialize, Serialize};
 
 /// 能力名。Tool 名ではなく**できること**で名付ける（Provider 差し替えで変わらない）。
@@ -39,14 +39,15 @@ impl Capability {
         }
     }
 
-    /// この能力に必要な最低ロール。読み取り専用は VIEWER で足りる。
-    pub fn min_role(self) -> Role {
+    /// この能力に対応する行為。権限の可否は `Permission` の表で決める。
+    /// ロールの大小比較では決めない（`TESTER` と `DEVELOPER` は優劣が無い）。
+    pub fn permission(self) -> Permission {
         match self {
             Self::KnowledgeSearch
             | Self::KnowledgeGetEvidence
             | Self::GraphNeighbor
-            | Self::GraphPath
-            | Self::CodeGetSymbol => Role::Viewer,
+            | Self::GraphPath => Permission::Search,
+            Self::CodeGetSymbol => Permission::CodeAnalysis,
         }
     }
 }
@@ -120,8 +121,8 @@ impl CapabilityGateway {
             }
         }
 
-        // 3. ユーザー権限
-        if principal.role < capability.min_role() {
+        // 3. ユーザー権限（`06-API.md` §4.1 の表で判定）
+        if !capability.permission().is_allowed(principal.role) {
             return Err(CapabilityError::Forbidden {
                 capability: capability.as_str(),
                 role: principal.role,

@@ -6,6 +6,26 @@
 CREATE SCHEMA core;
 
 -- ─────────────────────────────────────────────────────────────
+-- セッション変数の取り出し
+--
+-- `SET LOCAL` はコミット時に「未設定」ではなく**空文字**へ戻る。
+-- そのため `current_setting('app.project_id', true)::uuid` は、同じ接続で
+-- 2 回目以降のリクエストを処理したときに `''::uuid` で失敗する。
+-- （接続プールでは必ず起きる。実測で踏んだ。）
+-- ポリシーごとに NULLIF を書くと必ずどれか漏れるので、関数に閉じる。
+-- ─────────────────────────────────────────────────────────────
+
+CREATE FUNCTION core.current_project() RETURNS uuid
+  LANGUAGE sql STABLE
+  AS $$ SELECT NULLIF(current_setting('app.project_id', true), '')::uuid $$;
+
+CREATE FUNCTION core.current_user() RETURNS uuid
+  LANGUAGE sql STABLE
+  AS $$ SELECT NULLIF(current_setting('app.user_id', true), '')::uuid $$;
+
+GRANT EXECUTE ON FUNCTION core.current_project(), core.current_user() TO PUBLIC;
+
+-- ─────────────────────────────────────────────────────────────
 -- テナント境界
 -- ─────────────────────────────────────────────────────────────
 
@@ -70,11 +90,11 @@ CREATE TABLE core.api_token (
 
 ALTER TABLE core.project ENABLE ROW LEVEL SECURITY;
 CREATE POLICY project_scope ON core.project
-  USING (id = current_setting('app.project_id', true)::uuid);
+  USING (id = core.current_project());
 
 ALTER TABLE core.project_member ENABLE ROW LEVEL SECURITY;
 CREATE POLICY project_member_scope ON core.project_member
-  USING (project_id = current_setting('app.project_id', true)::uuid);
+  USING (project_id = core.current_project());
 
 -- workspace / app_user / api_token はテナント横断（ログイン前に引く）。
 -- ここに RLS を張ると認証が成立しない。権限はアプリ層で絞る。

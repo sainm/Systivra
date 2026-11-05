@@ -155,7 +155,7 @@ CREATE TABLE core.secret (
 
 ALTER TABLE core.job ENABLE ROW LEVEL SECURITY;
 CREATE POLICY job_scope ON core.job
-  USING (project_id = current_setting('app.project_id', true)::uuid);
+  USING (project_id = core.current_project());
 
 -- job_checkpoint は project_id を持たない。job 経由で辿る。
 ALTER TABLE core.job_checkpoint ENABLE ROW LEVEL SECURITY;

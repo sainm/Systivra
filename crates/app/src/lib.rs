@@ -5,8 +5,10 @@
 
 #![forbid(unsafe_code)]
 
+pub mod auth;
 pub mod health;
 
+pub use auth::{AuthError, Authenticated, Credential};
 pub use health::Readiness;
 
 use store::Store;

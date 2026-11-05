@@ -83,7 +83,8 @@ P1-ENV-01 Cargo workspace / compose / CI
 | ID | 状態 | 実測 |
 |---|---|---|
 | `P1-ENV-01` | **完了** | 13 crate が `cargo check` / `clippy -D warnings` / `fmt --check` 緑。`cargo test --workspace` 23 passed。`/healthz` 200、`/readyz` は DB 生存で 200・停止で 503。`compose` は未検証（開発機に Docker が無い） |
-| `P1-DB-01` | **完了** | `001` / `002` / `roles.sql` を実 DB に適用。`scripts/verify-db.sh` の 9 項目が緑 |
+| `P1-DB-01` | **完了** | `001`〜`003` / `roles.sql` を実 DB に適用。`scripts/verify-db.sh` の 10 項目が緑 |
+| `P1-API-01` | **完了** | ログイン / ログアウト / `/me` / `/projects/{pid}/me`。誤パスワードと不存在 ID の応答が同一。非所属プロジェクトは 404、偽造 Cookie は 401。権限は `06-API.md` §4.1 のマトリクスを 1 箇所に実装 |
 | その他 | 未着手 | — |
 
 > **依存の境界は Cargo.toml で機械的に効く。** `api` の `Cargo.toml` に `store` を入れていないので、HTTP 層から SQL を書こうとするとコンパイルで落ちる。「規約で守る」より確実。

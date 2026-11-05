@@ -1,7 +1,10 @@
 -- roles.sql
 -- 正本: docs/design/ja/detail/02-database-ddl.md §0.1
--- マイグレーションの前でも後でもよい。冪等。存在する schema / 表にだけ適用する
--- （kb / code / graph_meta / test / ai / ops は Phase 2 以降に増えるため）。
+-- **マイグレーションの後に流す。** 先に流すと schema が無く、USAGE を付与できず
+-- 「permission denied for schema core」で全 API が 500 になる。
+-- 冪等なので、マイグレーション追加のたびに再実行してよい。
+-- 存在する schema / 表にだけ適用する（kb / code / graph_meta / test / ai / ops は
+-- Phase 2 以降に増えるため）。
 
 \set ON_ERROR_STOP on
 

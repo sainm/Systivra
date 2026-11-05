@@ -31,14 +31,15 @@ psql -d postgres -q -c "CREATE DATABASE $DB;" || { say "一時 DB を作れま�
 export PGDATABASE="$DB"
 
 say "== 適用 =="
-psql -v ON_ERROR_STOP=1 -q -f "$ROOT/deployment/postgres/roles.sql"
-ok "roles.sql（schema が無い状態でも通る）"
+# 順序が重要：schema を作ってから権限を付ける。
 psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/001_core.sql"
 ok "001_core.sql"
 psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/002_core_ops.sql"
 ok "002_core_ops.sql"
+psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/003_authz.sql"
+ok "003_authz.sql"
 psql -v ON_ERROR_STOP=1 -q -f "$ROOT/deployment/postgres/roles.sql"
-ok "roles.sql 再実行（冪等）"
+ok "roles.sql（migrations の後）"
 
 say "== RLS =="
 psql -q >/dev/null <<'SQL'
@@ -84,6 +85,16 @@ got=$(psql -U systivra_scheduler -tA -c \
 say "== 監査ログ分区 =="
 n=$(psql -tAc "SELECT count(*) FROM pg_inherits WHERE inhparent='core.audit_log'::regclass;")
 [ "${n:-0}" -ge 12 ] && ok "月次分区が $n 個ある" || no "分区が足りない（${n:-0} 個）"
+
+say "== SET LOCAL 残留（接続再利用）=="
+# 同じ接続で「スコープ付き → コミット → スコープ無し」を続けて実行する。
+# SET LOCAL はコミット時に「未設定」ではなく空文字へ戻るため、NULLIF が無いと
+# ''::uuid で落ちる。接続プールでは必ず起きる。
+out=$(psql -U systivra_app -tA \
+  -c "BEGIN; SELECT set_config('app.project_id', '$PID', true); COMMIT;" \
+  -c "SELECT count(*) FROM core.project;" 2>&1)
+last=$(printf '%s\n' "$out" | tail -1)
+[ "$last" = "0" ] && ok "コミット後の未スコープ参照が落ちない（0 件）" || no "SET LOCAL 残留で失敗（$last）"
 
 say "== 冪等キー =="
 if psql -q -c "INSERT INTO core.job (project_id,kind,status,idempotency_key,input) VALUES ('$PID','PDF_PARSE','QUEUED','k1','{}');" >/dev/null 2>&1; then

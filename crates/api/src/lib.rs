@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod auth;
 pub mod error;
 pub mod routes;
 pub mod trace;
@@ -14,28 +15,45 @@ use std::sync::Arc;
 use app::App;
 use axum::Router;
 
-/// ハンドラが共有する状態。`App` を `Arc` で包む（Clone を軽くする）。
+use crate::auth::SessionConfig;
+
+/// ハンドラが共有する状態。
 #[derive(Clone)]
 pub struct ApiState {
     pub app: Arc<App>,
+    pub session: Arc<SessionConfig>,
 }
 
 impl ApiState {
-    pub fn new(app: App) -> Self {
-        Self { app: Arc::new(app) }
+    pub fn new(app: App, session: SessionConfig) -> Self {
+        Self {
+            app: Arc::new(app),
+            session: Arc::new(session),
+        }
     }
 }
 
-/// ルータを組み立てる。ミドルウェアの順序はここで固定する。
+/// ルータを組み立てる。認証の要否で 2 つに分ける。
 ///
-/// `06-API.md` §4 の順序（trace_id → 認証 → パス照合 → SET LOCAL → 権限）のうち、
-/// Phase 1 では **trace_id だけ**を実装する。残りは `P1-API-01`。
-pub fn router(app: App) -> Router {
-    let state = ApiState::new(app);
+/// `require_auth` を全体に掛けると `/healthz` が 401 になり、
+/// Kubernetes の liveness probe が落ちてコンテナが再起動を繰り返す。
+/// **公開ルートは明示的に外に出す。**
+pub fn router(app: App, session: SessionConfig) -> Router {
+    let state = ApiState::new(app, session);
+
+    let protected = Router::new()
+        .merge(routes::auth::protected_router())
+        .merge(routes::project::router())
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_auth,
+        ));
 
     Router::new()
         .merge(routes::health::router())
-        // 全ての応答に `X-Trace-Id` を付ける。Problem の `trace_id` と同じ値。
+        .merge(routes::auth::public_router())
+        .merge(protected)
+        // 最も外側。全応答に `X-Trace-Id` を付ける。
         .layer(axum::middleware::from_fn(trace::with_trace_id))
         .with_state(state)
 }

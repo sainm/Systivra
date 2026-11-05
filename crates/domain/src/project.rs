@@ -19,6 +19,17 @@ pub enum SourceKind {
 }
 
 impl SourceKind {
+    /// DB の text から戻す。未知の値は `None`。
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "GIT" => Some(Self::Git),
+            "SVN" => Some(Self::Svn),
+            "DIR" => Some(Self::Dir),
+            "SNAPSHOT" => Some(Self::Snapshot),
+            _ => None,
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Git => "GIT",
@@ -31,9 +42,9 @@ impl SourceKind {
 
 /// ロール。`core.project_member.role` の CHECK と一致させる。
 ///
-/// 権限の対応表は `06-API.md` §4。ここでは**順序**だけを持つ
-/// （`OWNER` が最強）。順序を 1 箇所に閉じ込めないと、画面ごとに
-/// 「TESTER は DEVELOPER より上か」がぶれる。
+/// **`Ord` は「強い順」ではない。** 表示順と並べ替えのために付けているだけで、
+/// 権限判定には使わない。`TESTER` と `DEVELOPER` に優劣は無い（互いに
+/// 書ける領域が違う）。可否は必ず [`Permission`](crate::Permission) の表で決める。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Role {
@@ -45,6 +56,18 @@ pub enum Role {
 }
 
 impl Role {
+    /// DB の text から戻す。未知の値は `None`（勝手に VIEWER に落とさない）。
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "VIEWER" => Some(Self::Viewer),
+            "TESTER" => Some(Self::Tester),
+            "DEVELOPER" => Some(Self::Developer),
+            "ARCHITECT" => Some(Self::Architect),
+            "OWNER" => Some(Self::Owner),
+            _ => None,
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Viewer => "VIEWER",
@@ -53,26 +76,6 @@ impl Role {
             Self::Architect => "ARCHITECT",
             Self::Owner => "OWNER",
         }
-    }
-
-    /// メンバー管理（招待・ロール変更・削除）は OWNER だけ。
-    pub fn can_manage_members(self) -> bool {
-        self == Self::Owner
-    }
-
-    /// 設計・Ontology の確定は ARCHITECT 以上。
-    pub fn can_approve_design(self) -> bool {
-        self >= Self::Architect
-    }
-
-    /// コード解析の実行・設定変更は DEVELOPER 以上。
-    pub fn can_write_code(self) -> bool {
-        self >= Self::Developer
-    }
-
-    /// テストの承認は TESTER 以上。
-    pub fn can_approve_test(self) -> bool {
-        self >= Self::Tester
     }
 }
 
@@ -104,25 +107,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn role_order_is_explicit() {
+    fn display_order_is_stable() {
+        // 並べ替え用の順序。権限の強弱ではない。
         assert!(Role::Owner > Role::Architect);
         assert!(Role::Architect > Role::Developer);
         assert!(Role::Developer > Role::Tester);
         assert!(Role::Tester > Role::Viewer);
-    }
-
-    #[test]
-    fn only_owner_manages_members() {
-        assert!(Role::Owner.can_manage_members());
-        assert!(!Role::Architect.can_manage_members());
-    }
-
-    #[test]
-    fn viewer_can_do_almost_nothing() {
-        let v = Role::Viewer;
-        assert!(!v.can_manage_members());
-        assert!(!v.can_approve_design());
-        assert!(!v.can_write_code());
-        assert!(!v.can_approve_test());
     }
 }

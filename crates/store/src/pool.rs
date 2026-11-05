@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use domain::ProjectId;
+use domain::{ProjectId, UserId};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::{Postgres, Transaction};
 
@@ -78,6 +78,29 @@ impl Store {
         Ok(tx)
     }
 
+    /// ユーザーと（任意で）プロジェクトを設定したトランザクション。
+    ///
+    /// ログイン経路と「自分の所属一覧」は、プロジェクトが決まる前に走る。
+    /// そのため `app.user_id` だけで読める経路が要る（`003_authz.sql`）。
+    pub async fn begin_as(
+        &self,
+        user: UserId,
+        project: Option<ProjectId>,
+    ) -> Result<Tx<'_>, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT set_config('app.user_id', $1, true)")
+            .bind(user.to_string())
+            .execute(&mut *tx)
+            .await?;
+        if let Some(p) = project {
+            sqlx::query("SELECT set_config('app.project_id', $1, true)")
+                .bind(p.to_string())
+                .execute(&mut *tx)
+                .await?;
+        }
+        Ok(tx)
+    }
+
     /// スコープを設定しないトランザクション。
     ///
     /// 使ってよいのは「プロジェクトに属さない表」だけ（`core.workspace`、
@@ -85,4 +108,13 @@ impl Store {
     pub async fn begin_unscoped(&self) -> Result<Tx<'_>, StoreError> {
         Ok(self.pool.begin().await?)
     }
+}
+
+/// 読み取りトランザクションを閉じる。
+///
+/// `Transaction::commit` は `sqlx::Error` を返す。`app` は sqlx に依存しないので、
+/// ここで `StoreError` に包んでから渡す。
+pub async fn commit(tx: Tx<'_>) -> Result<(), StoreError> {
+    tx.commit().await?;
+    Ok(())
 }

@@ -15,10 +15,13 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      # 初回起動時だけ流れる。順序はファイル名順なので接頭辞で制御する。
-      - ./deployment/postgres/roles.sql:/docker-entrypoint-initdb.d/00_roles.sql:ro
+      # 初回起動時だけ流れる。順序はファイル名順。
+      # **roles.sql は必ず最後**：schema が無いと USAGE を付与できず、
+      # 先に流すと「permission denied for schema core」で全 API が 500 になる。
       - ./migrations/001_core.sql:/docker-entrypoint-initdb.d/10_001_core.sql:ro
       - ./migrations/002_core_ops.sql:/docker-entrypoint-initdb.d/11_002_core_ops.sql:ro
+      - ./migrations/003_authz.sql:/docker-entrypoint-initdb.d/12_003_authz.sql:ro
+      - ./deployment/postgres/roles.sql:/docker-entrypoint-initdb.d/90_roles.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d systivra"]
       interval: 3s
@@ -33,6 +36,9 @@ services:
       DATABASE_URL: postgres://systivra_app@db:5432/systivra
       RUST_LOG: info,systivra_api=debug
       PORT: "8080"
+      # 開発用の固定値。本番では Secrets から注入し、必ず 32 バイト以上にする。
+      SESSION_SECRET: dev-only-session-secret-0123456789abcdef
+      SESSION_COOKIE_SECURE: "false"
     ports:
       - "8080:8080"
     depends_on:

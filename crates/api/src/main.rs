@@ -6,7 +6,7 @@
 
 use std::net::SocketAddr;
 
-use api::router;
+use api::{auth::SessionConfig, router};
 use app::App;
 
 #[tokio::main]
@@ -25,7 +25,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = App::from_database_url(&database_url)?;
 
-    let http = router(app);
+    // 署名鍵が無いまま起動しない。空鍵で動かすと Cookie を誰でも偽造できる。
+    let session = SessionConfig::from_env()?;
+
+    let http = router(app, session);
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
