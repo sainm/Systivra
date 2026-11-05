@@ -20,6 +20,9 @@ encoding_rs.workspace = true
 tree-sitter.workspace = true
 tree-sitter-java.workspace = true
 tree-sitter-html.workspace = true
+zip.workspace = true
+quick-xml.workspace = true
+sha2.workspace = true
 
 [[bin]]
 name = "systivra-worker"

@@ -10,6 +10,7 @@
 
 pub mod jsp;
 pub mod text;
+pub mod xlsx;
 
 /// worker の 1 反復。`P1-JOB-01` で実装する。
 pub async fn tick() {
