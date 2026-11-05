@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod jsp;
 pub mod text;
 
 /// worker の 1 反復。`P1-JOB-01` で実装する。

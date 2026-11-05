@@ -59,6 +59,9 @@ hmac = "0.12"
 sha2 = "0.10"
 chardetng = "0.1"
 encoding_rs = "0.8"
+tree-sitter = "0.25"
+tree-sitter-java = "0.23"
+tree-sitter-html = "0.23"
 
 [profile.release]
 lto = "thin"
