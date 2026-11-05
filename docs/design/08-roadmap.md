@@ -6,7 +6,7 @@
 
 1. **每个 Phase 都必须有一条能跑通的端到端路径**。不允许「这一期只做后端，界面下期再说」——那样验收时无法判断是否真的可用。
 2. **先打通，再加深**。Phase 1 就用一个 PDF 跑通「上传 → 切块 → 检索 → 证据」，哪怕切块很粗糙。后续 Phase 是替换与增强，不是从零开始。
-3. **不确定性前置**。最容易翻车的三件事（XLSX 解析、OpenRewrite 离线类型归属、JSP 解析）放在 Phase 2 和 Phase 4 的前两周做技术验证，失败就调整方案，而不是等到联调。
+3. **不确定性前置**。最容易翻车的四件事（XLSX 解析、OpenRewrite 离线类型归属、JSP 解析、Shift_JIS 编码）放在 Phase 0 / 2 / 4 的前段做技术验证，失败就调整方案，而不是等到联调。
 
 ### 1.2 团队配置（2026-11-05 已确认）
 
@@ -33,9 +33,9 @@
 | 契约骨架 | `contracts/`：Fact / Evidence / Capability / Provider 的 JSON Schema 初版 |
 | 数据模型 | 迁移脚本 001（core + kb 基础表） |
 | 工程骨架 | Cargo workspace、前端脚手架、Docker Compose、CI |
-| 技术验证 | XLSX 合并单元格 + 图形锚点提取（1 天）；Tree-sitter 解析 JSP 可行性（1 天）；OpenRewrite 离线 classpath（1 天）；**Shift_JIS/Windows-31J 探测与字节偏移映射（1 天）** |
+| 技术验证 | XLSX 合并单元格 + 图形锚点提取（1 天）；Tree-sitter 解析 JSP 可行性（1 天）；OpenRewrite 离线 classpath（1 天）；Shift_JIS/Windows-31J 探测与字节偏移映射（1 天）；**200 册规模实测（1 天）** |
 
-**验收**：`docker compose up` 后，API 返回 `/healthz`，前端能打开登录页；三个技术验证各有一页结论（可行/不可行/降级方案）。
+**验收**：`docker compose up` 后，API 返回 `/healthz`，前端能打开登录页；五个技术验证各有一页结论（可行/不可行/降级方案）。
 
 ---
 
@@ -64,17 +64,19 @@
 
 ---
 
-### Phase 2：RAG Engine 完整化（4 周）
+### Phase 2：RAG Engine 完整化（5 周）
 
 | 模块 | 范围 |
 |---|---|
 | XLSX 解析 | 自研：sheet / 单元格 / 合并 / 公式 / 图形锚点 / 命名区域；区域识别与切块 |
 | DOCX / PPTX | docling-serve 接入，章节与幻灯片结构 |
 | 结构树 | 统一 DocNode 模型，locator 规范化（PDF/DOCX/XLSX/MD/CODE） |
-| 切块 | 结构感知，按格式差异化；父子 chunk（summary → detail） |
+| 切块 | 结构感知，按格式差异化；父子 chunk（表块 → 行） |
 | 检索 | 混合检索 + RRF + 可选 rerank；元数据/项目/revision 过滤 |
 | 日语 | Lindera(IPADIC) 分词 + tsvector；全角半角/旧字体归一；pg_bigm 可用时启用 L2 并为部分一致做查询路由 |
 | 索引版本 | `index_build` + 模型切换重建 |
+| 大规模导入 | 清单（CSV/JSON）批量导入；部分成功、失败清单、断点续跑 |
+| 分区 | `kb.chunk` / `kb.embedding` 按 `project_id` 分 32~64 区，每区独立 HNSW |
 | 评测 | 60 题金标集（词级 / 部分一致 / 标识符外字 各 20），分三类统计 recall@10 / MRR / P95 |
 | 前端 | Chunk Explorer、检索检查页（分数拆解）、索引管理 |
 
@@ -84,6 +86,7 @@
 - 任一 chunk 可反查到 `parse_run` 与解析器版本。
 - 切换 embedding 模型时，旧索引仍可查（按 `index_build` 隔离），新索引构建完成后再切换。
 - 金标集三类查询各自 recall@10 ≥ 0.85（不取平均掩盖短板）；每次改动 CI 自动跑并出报告。
+- 1,000 册批量导入在部分失败下能跑完并可续跑；1,200 万 chunk 规模检索 P95 < 2.0s（`ja/reference/scale-model.md` §8）。
 
 ---
 
@@ -146,7 +149,7 @@
 
 **验收**
 
-- 对 SAMPLE 工程的 20 个预设变更，影响项召回 ≥ 90%（对比人工金标）。
+- 对 SAMPLE 工程的 20 个预设变更，影响项召回 ≥ 90%、精确率 ≥ 70%（对比人工金标；过度包含必须标注理由）。
 - 任一影响项可展开完整路径与证据；无证据的项数量为 0。
 - 同一输入重复执行，结果完全一致（diff 为空）。
 - 截断情况（hub/depth/budget）100% 在 UI 上可见。
@@ -229,7 +232,7 @@ systivra/
 ├── workers/
 │   ├── rewrite/                # Java 21 + OpenRewrite（Gradle）
 │   └── runner/                 # Node + Playwright
-│   # doc-worker 不写代码：直接用 docling-serve 镜像
+│   # 用 docling-serve 镜像，不自研 doc-worker
 ├── contracts/
 │   ├── api/openapi.json        # 由 utoipa 生成，CI 校验
 │   ├── capabilities/*.schema.json
@@ -377,7 +380,7 @@ domain ──▶ contracts ──▶ store ──▶ providers ──▶ engines
 
 | 金标集 | 规模 | 标注内容 | 用途 |
 |---|---|---|---|
-| RAG | 50 问 | 正确答案的 chunk_id 集合 | recall@5、MRR、证据正确率 |
+| RAG | 60 问（词级 / 部分一致 / 标识符外字 各 20） | 正确答案的 chunk_id 集合 | recall@10、MRR、证据正确率 |
 | 代码分析 | 200 关系 + 30 动态案例 | 真实关系、预期 resolution | precision / recall |
 | 影响分析 | 20 变更 | 人工列出的影响项（含理由） | 召回率、精确率、截断率 |
 
@@ -385,13 +388,17 @@ domain ──▶ contracts ──▶ store ──▶ providers ──▶ engines
 
 ### 6.3 性能目标（Phase 2/4 用真实数据校准）
 
-| 场景 | 目标 | 条件 |
+> 下表是**验收值（可对客户承诺的上限）**。设计正确时能达到的目标值见 `ja/detail/03-performance.md` §1（检索 1.2s、影响 90s、首次导入 24h）。
+
+| 场景 | 验收值（P95） | 条件 |
 |---|---|---|
-| 检索 P95 | < 800ms | 10 万 chunk，混合检索 + rerank |
-| 邻居查询 P95 | < 200ms | 10 万节点，单跳 |
-| 影响分析（6 跳） | < 90s | 5 万 fact，37 个影响项 |
+| 检索 P95 | < 2.0s | 1,200 万 chunk，混合检索 + rerank |
+| 邻居查询 P95 | < 300ms | 84 万节点，单跳 |
+| 影响分析（6 跳） | < 120s | 250 万 fact，37 个影响项 |
 | 文件解析吞吐 | ≥ 20 页/秒 | PDF 文本层，docling |
-| Excel 解析 | ≥ 5000 单元格/秒 | 合并单元格 + 公式 |
+| Excel 解析 | ≥ 5000 单元格/秒/核 | 合并单元格 + 公式 |
+| 首次导入 | < 48 小时 | 60,000 册，16 个 worker |
+| 日增量 | < 40 分钟 | 100 册 + 50 个 Java 文件 |
 | 增量代码分析 | < 全量 10% | 改 1 个文件 |
 
 ### 6.4 CI 门禁
@@ -423,7 +430,7 @@ domain ──▶ contracts ──▶ store ──▶ providers ──▶ engines
 |---|---|---|
 | 0 | 骨架能跑，三个技术风险有结论 | compose 起得来；3 份验证报告 |
 | 1 | 一个 PDF 能从上传走到证据 | 100 页 / 5 分钟 / 可定位 |
-| 2 | Excel 设计书能被正确切块与检索 | recall@5 ≥ 0.85 |
+| 2 | Excel 设计书能被正确切块与检索 | 三类查询 recall@10 ≥ 0.85 |
 | 3 | 文档图能建起来且可重建 | 节点误差 0；重建成功 |
 | 4 | 真实 Java Web 能解析出可信关系 | precision ≥ 0.98（RESOLVED） |
 | 5 | 改一个方法能算出影响范围 | 召回 ≥ 0.90；可复现 |

@@ -54,7 +54,7 @@
 │   事务边界 · 幂等键 · 领域事件发件箱                                          │
 └───────────────────────────────┬─────────────────────────────────────────────┘
 ┌───────────────────────────────────────────▼─────────────────────────────────┐
-│ L4 Capability (crates/capability)  ← 唯一对外/对 AI 暴露的稳定契约            │
+│ L4 Capability (runtime::capability)  ← 唯一对外/对 AI 暴露的稳定契约         │
 │   KnowledgeCap · GraphCap · CodeAnalysisCap · ImpactCap · TestCap ·         │
 │   WorkflowCap · AdminCap                                                    │
 │   每个 Capability = 输入 Schema + 输出 Schema + 权限 + 超时 + 错误契约        │
@@ -95,7 +95,7 @@ Capability 是**唯一的执行入口**，MCP Server、Agent Tool、内部 UseCa
 |---|---|---|---|
 | `api` | HTTP 契约、认证会话 | app, capability | 直接访问 sqlx / neo4j driver |
 | `app` | 用例事务边界、幂等、发件箱 | capability, store, domain | 包含解析/检索算法 |
-| `capability` | 能力 Schema、权限映射、超时预算 | engine traits, provider-manager | 包含业务算法 |
+| `runtime::capability` | 能力 Schema、权限映射、超时预算 | engine traits, `providers` | 包含业务算法 |
 | `rag-engine` | 文档结构、切块、检索融合、证据组装 | `RagProvider`, `EmbeddingProvider`, `RerankProvider` | 直接写 PG（通过 store port） |
 | `graph-engine` | 图域模型、遍历算法、路径评分 | `GraphProvider`, store | 拼接未经校验的 Cypher 片段 |
 | `ontology` | 实体/关系类型注册表、约束、版本 | store | 硬编码业务实体类型到代码分支 |
@@ -104,11 +104,13 @@ Capability 是**唯一的执行入口**，MCP Server、Agent Tool、内部 UseCa
 | `test-engineering` | 规则目录、Scenario/Case/Data、覆盖口径 | store, `TestRunnerProvider`, code-analysis | 把「生成」当「覆盖」 |
 | `agent-runtime` | Agent 注册、会话、预算、审批 | capability | 持有数据库连接 / 执行任意 SQL |
 | `workflow-engine` | 定义解析、状态机、检查点 | capability | 内嵌第二套 AI 编排 |
-| `provider-manager` | 注册、健康、切换、密钥引用 | provider traits | 业务逻辑 |
+| `provider-manager`（`providers::manager`） | 注册、健康、切换、密钥引用 | provider traits | 业务逻辑 |
 | `store` | 所有 PG 访问、迁移、发件箱 | domain | 跨模块业务判断 |
 | `worker` | 作业领取、执行、重试、心跳 | app, capability | 绕过 app 直接改状态 |
 
 **边界判据**：如果一个改动需要同时修改两个模块的「拥有物」，说明边界划错了，先改边界再改代码。
+
+> 表中的名称是逻辑模块。crate 名以 `08-roadmap.md` §3 为准。`runtime::capability` 属 `runtime` crate，`providers::manager` 属 `providers` crate，`ontology` 属 `engine-graph` crate。`rag-engine` / `graph-engine` / `code-analysis` / `impact-engine` / `test-engineering` 分别对应 crate `engine-rag` / `engine-graph` / `engine-code` / `engine-impact` / `engine-test`。`agent-runtime` 与 `workflow-engine` 归入 `runtime` crate，但架构层仍是 L5（crate 划分与分层并不一一对应）。
 
 ---
 
@@ -201,7 +203,7 @@ COMMIT
   → 入队 parse job
       → ParserProvider 分流：
           XLSX        → 自研 Rust 解析器 (calamine + OOXML 补充)
-          PDF/DOCX/PPTX → Docling Worker (Python)
+          PDF/DOCX/PPTX → docling-serve（现成容器）
           MD/TXT/CSV  → 原生
           HTML        → 原生 (scraper + 结构提取)
       → 产出 DocNode 树（含 locator）
@@ -210,7 +212,7 @@ COMMIT
   → 元数据抽取 + 实体链接候选
   → Embedding（批量、可中断、断点续跑）
   → 写 pgvector + tsvector
-  → outbox: ChunkIndexed → 图投影（Document/Section/Chunk 引用节点）
+  → outbox: ChunkIndexed → 图投影（只投影 Document / Section。chunk 不投影）
 ```
 
 每步都有独立 `parse_run` 记录，失败可从任意步骤重跑，不必从头。
@@ -289,11 +291,11 @@ AgentRun 启动（预算：tokens / tool_calls / wall_time / cost）
 |---|---|---|---|---|
 | `sep-api` | Rust | HTTP/SSE、认证、用例编排 | 水平（无状态） | 无本地状态 |
 | `sep-worker` | Rust | 解析调度、投影、影响计算、测试编排 | 水平（按队列分区） | 通过 job 表协调 |
-| `doc-worker` | Python | Docling 解析 | 水平（CPU/GPU 密集） | 无状态 |
+| `docling-serve` | Python | Docling 解析（现成容器，无自研代码） | 水平（CPU/GPU 密集） | 无状态 |
 | `rewrite-worker` | Java | OpenRewrite LST 解析 | 水平（JVM 内存大） | 无状态 |
 | `test-runner` | Node | Playwright 执行 | 水平（按浏览器实例） | 临时 workspace |
 
-**为什么 doc-worker 与 rewrite-worker 必须是独立进程**：
+**为什么 docling-serve 与 rewrite-worker 必须是独立进程**：
 
 - 依赖冲突：Docling 需要特定 PyTorch/Python 版本；OpenRewrite 需要 JDK 与完整类型解析。
 - 故障隔离：解析一个畸形 Excel 不应该拖垮 API。
@@ -307,7 +309,7 @@ AgentRun 启动（预算：tokens / tool_calls / wall_time / cost）
 API 请求 → 入队（job 表）→ 立即返回 202 + job_id
                 │
                 ├─ 队列按 (project_id, priority) 分区
-                ├─ 每类作业有独立并发上限（解析 4 / 投影 8 / 影响 4 / 执行 2）
+                ├─ 每类作业有独立并发上限（Excel 解析 8~16 / 投影 8 / 影响 4 / 执行 2）
                 ├─ 全局限流：单项目并发作业数上限，防止一个项目饿死其他项目
                 └─ 背压：队列深度 > 阈值时，新作业进入 PENDING 并给出预估等待
 ```
@@ -340,11 +342,11 @@ PENDING → QUEUED → RUNNING → SUCCEEDED
 services:
   api:            sep/api:0.1        # :8080
   worker:         sep/worker:0.1
-  doc-worker:     sep/doc-worker:0.1 # :8001
+  docling-serve:  quay.io/docling-project/docling-serve-cpu:v1.38.1  # :5001
   rewrite-worker: sep/rewrite:0.1    # :8081
   test-runner:    sep/test-runner:0.1# :8082
-  postgres:       pgvector/pgvector:pg18
-  neo4j:          neo4j:5.26-community
+  postgres:       pgvector/pgvector:pg18  # 生产环境固定 0.8.6 系的 digest
+  neo4j:          neo4j:5.26.32-community
   minio:          minio/minio
   otel-collector: otel/opentelemetry-collector-contrib
 volumes:
@@ -367,17 +369,14 @@ volumes:
 
 ### 7.4 资源基线（单项目，A-02 规模）
 
-| 服务 | CPU | 内存 | 磁盘 | 说明 |
+| 服务 | 数量 | CPU | 内存 | 磁盘 |
 |---|---|---|---|---|
-| api | 2 | 2 GB | — | |
-| worker | 4 | 8 GB | 50 GB workspace | 解析与投影 |
-| doc-worker | 4 | 12 GB | 20 GB 缓存 | PDF 解析峰值高 |
-| rewrite-worker | 2 | 6 GB（JVM heap 4G） | 10 GB | 大项目需调大 |
-| postgres | 4 | 16 GB | 200 GB | shared_buffers 4GB |
-| neo4j | 2 | 8 GB | 100 GB | pagecache 4GB |
-| minio | 1 | 1 GB | 500 GB | 原始文档与产物 |
+| xlsx 解析 worker（`sep-worker` 解析池） | 16 | 4 | 8 GB | 50 GB |
+| postgres | 1 | 16 | 64 GB | 2 TB NVMe |
+| neo4j | 1 | 8 | 64 GB | 500 GB |
+| minio | 2 | 4 | 8 GB | 2 TB |
 
-> 这些数字是**起始值**，Phase 2 与 Phase 4 必须用真实项目重新测量并回填。把它们当成承诺是危险的。
+> 全部服务与依据以 `ja/reference/scale-model.md` §7 为准。旧假设（20 万 chunk、4 CPU / 16 GB）的数字不再使用。Phase 2 与 Phase 4 用实测值回填。
 
 ---
 
@@ -387,7 +386,7 @@ volumes:
 |---|---|---|---|
 | 投影漂移 | outbox 消费失败未告警 | 图上少了一条关键边，影响分析静默漏项 | 每日漂移检测 + 「图完整度」指标上首页 |
 | 证据悬空 | 文档改版但 chunk 未失效 | 点击证据打开空白/错位 | revision 绑定 + stale 标记 + 抽样校验 |
-| 解析雪崩 | 一个超大 XLSX 占满 doc-worker | 其他项目排队超时 | 单文件大小/页数上限 + 独立队列 + 超时熔断 |
+| 解析雪崩 | 一个超大 XLSX 占满 docling-serve | 其他项目排队超时 | 单文件大小/页数上限 + 独立队列 + 超时熔断 |
 | 事务越界 | Capability 内部开事务，调用方也开 | 死锁、部分提交 | 事务只在 app 层开启；engine 只接受 `&mut Tx` |
 | 幂等失效 | 重试时 input_digest 包含时间戳 | 重复生成重复资产 | 幂等键只取内容相关字段 |
 | AI 越权 | Agent 直接把 project_id 作为参数传入 | 跨项目读取 | project_id 由网关注入，Agent 不可见不可改 |

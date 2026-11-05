@@ -116,7 +116,7 @@ CREATE INDEX outbox_pending_idx ON core.outbox_event (seq)
   WHERE published_at IS NULL AND NOT dead_letter;
 
 CREATE TABLE core.audit_log (
-  id            bigserial PRIMARY KEY,
+  id            bigserial,
   project_id    uuid,
   actor_type    text NOT NULL CHECK (actor_type IN ('USER','AGENT','SYSTEM')),
   actor_id      text NOT NULL,
@@ -127,7 +127,8 @@ CREATE TABLE core.audit_log (
   result        text NOT NULL,
   detail        jsonb NOT NULL DEFAULT '{}',
   trace_id      text,
-  occurred_at   timestamptz NOT NULL DEFAULT now()
+  occurred_at   timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (id, occurred_at)
 );
 -- 只追加：REVOKE UPDATE, DELETE
 
@@ -150,7 +151,8 @@ CREATE TABLE kb.document_revision (
   document_id     uuid NOT NULL REFERENCES kb.document(id),
   source_revision text,                    -- git sha / svn rev / snapshot id
   content_hash    bytea NOT NULL,
-  object_key      text NOT NULL,           -- 原始文件在对象存储的位置
+  object_key      text NOT NULL,
+  parse_artifact_key text,          -- 压缩后的单元格网格，存对象存储；不把单元格写成 DB 行           -- 原始文件在对象存储的位置
   file_size       bigint NOT NULL,
   mime_type       text NOT NULL,
   status          text NOT NULL CHECK (status IN ('CURRENT','SUPERSEDED','FAILED')),
@@ -177,9 +179,11 @@ CREATE TABLE kb.doc_node (
   meta        jsonb NOT NULL DEFAULT '{}'
 );
 CREATE INDEX doc_node_parent_idx ON kb.doc_node (revision_id, parent_id, ordinal);
+-- 不建单元格级 doc_node（会到 17.3 亿行）。只保留 Document / Sheet / Section / Region。
+-- 单元格网格放 parse_artifact_key 指向的压缩产物，chunk 用 Sheet!Range 引用。
 
 CREATE TABLE kb.chunk (
-  id            uuid PRIMARY KEY,
+  id            uuid NOT NULL,
   project_id    uuid NOT NULL,
   document_id   uuid NOT NULL,
   revision_id   uuid NOT NULL,
@@ -196,10 +200,12 @@ CREATE TABLE kb.chunk (
   fts           tsvector GENERATED ALWAYS AS (to_tsvector('simple', tokenized)) STORED,
   is_current    boolean NOT NULL DEFAULT true,
   superseded_at timestamptz,
-  created_at    timestamptz NOT NULL DEFAULT now()
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (id, project_id)
 );
 CREATE INDEX chunk_fts_idx   ON kb.chunk USING gin (fts) WHERE is_current;
 CREATE INDEX chunk_scope_idx ON kb.chunk (project_id, document_id, is_current);
+-- 按 1,200 万 chunk 设计。按 project_id 哈希分 32~64 个分区（§1.4）。
 
 CREATE TABLE kb.embedding_model (
   id          uuid PRIMARY KEY,
@@ -214,7 +220,7 @@ CREATE TABLE kb.embedding_model (
 
 -- 按维度分表；同表内不同模型用 partial HNSW index 隔离
 CREATE TABLE kb.embedding_1024 (
-  chunk_id   uuid NOT NULL REFERENCES kb.chunk(id) ON DELETE CASCADE,
+  chunk_id   uuid NOT NULL,          -- 不对分区 chunk 建 FK，由应用保证
   model_id   uuid NOT NULL REFERENCES kb.embedding_model(id),
   vec        vector(1024) NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
@@ -336,7 +342,7 @@ CREATE TABLE graph_meta.ontology_version (
 );
 
 CREATE TABLE graph_meta.entity (
-  id                uuid PRIMARY KEY,
+  id                uuid PRIMARY KEY,   -- 与 API / 图上的 entity_id 相同
   project_id        uuid NOT NULL,
   entity_type       text NOT NULL,
   natural_key       text NOT NULL,     -- 业务唯一键，如 fqn 或 screen code
@@ -430,16 +436,18 @@ CREATE TABLE test.coverage_snapshot (
 );
 ```
 
-其余表（`test_plan / test_scenario / test_step / test_data_set / test_data_row / test_run / defect / impact_report / impact_item / agent / agent_version / prompt_template / agent_run / agent_step / approval_request / workflow_def / workflow_run / node_run / mcp_server / capability_binding / provider / provider_config / provider_health / secret`）结构从略，字段定义见 `docs/database/` 中的迁移脚本。
+其余表（`parse_run / index_build / code_revision / analysis_run / classpath_index / test_plan / test_scenario / test_step / test_data_set / test_data_row / test_run / defect / impact_report / impact_item / agent / agent_version / prompt_template / agent_run / agent_step / approval_request / workflow_def / workflow_run / node_run / mcp_server / capability_binding / provider / provider_config / provider_health / secret`）结构从略，字段定义见 `docs/database/` 中的迁移脚本。
 
 ### 1.4 索引与分区策略
 
 | 表 | 策略 | 理由 |
 |---|---|---|
-| `kb.chunk` | 按 `project_id` 哈希分区（> 500 万行时启用） | 单项目查询占绝大多数 |
-| `code.fact` | 按 `revision_id` 分区（每 revision 一个分区） | 历史 revision 只读，可整体归档 |
+| `kb.chunk` | 按 `project_id` 哈希分 32~64 区 | 1,200 万行。单索引会让 FTS 与 vacuum 崩 |
+| `kb.embedding_1024` | 同键分区，**每个分区独立 HNSW** | 1,200 万 × 1024 维。单索引构建时内存不足 |
+| `kb.doc_node` | 按 `revision_id` 分区 | 414 万行。不含单元格节点 |
+| `code.fact` | 不分区，建 `(project_id, revision_id)` 索引 | 250 万行单表足够；旧 revision 导出后删除 |
 | `core.audit_log` | 按 `occurred_at` 月分区 | 合规保留 + 冷热分离 |
-| `test.test_execution` | 按 `started_at` 月分区 | 执行记录增长最快 |
+| `test.test_execution` | 不分区 | 10 万行规模，180 天归档 |
 | `kb.evidence` | 不分区，但按 `document_id` 聚簇 | 证据查询总是按文档 |
 
 ### 1.5 数据保留
@@ -514,15 +522,15 @@ FOR ()-[r:CALLS]-() ON (r.revision);
 
 ```cypher
 // 邻居
-MATCH (a:Entity {project_id:$pid, entity_id:$eid})-[r]->(b:Entity)
+MATCH (a:Entity {uid:$uid})-[r]->(b:Entity)
 WHERE type(r) IN $rel_types AND r.revision = $rev
 RETURN b.entity_id AS id, b.entity_type AS kind, b.name AS name,
        type(r) AS rel, r.resolution AS resolution, r.confidence AS confidence
 LIMIT $limit;
 
 // 最短路径（关系类型白名单由服务端枚举校验后拼接）
-MATCH (a:Entity {project_id:$pid, entity_id:$from}),
-      (b:Entity {project_id:$pid, entity_id:$to}),
+MATCH (a:Entity {uid:$from_uid}),
+      (b:Entity {uid:$to_uid}),
       p = shortestPath((a)-[:CALLS|IMPLEMENTS|EXTENDS*..8]->(b))
 RETURN [n IN nodes(p) | n.entity_id] AS node_ids,
        [r IN relationships(p) | type(r)] AS rels
@@ -700,7 +708,7 @@ CREATE TABLE kb.retrieval_log (
 
 1. `quote` 必须是原文的**精确子串**，服务端校验；不匹配则拒绝（防止 AI 编造引用）。
 2. `locator` 必须能定位到可高亮的范围。
-3. `quote_hash = sha256(normalize(quote))`，用于检测原文是否被篡改。
+3. `quote_hash = sha256(NFC(quote))`，用于检测原文是否被篡改。校验用原文（NFC），不使用 NFKC。
 
 ---
 

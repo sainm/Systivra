@@ -75,7 +75,7 @@ document
    - 下一行数据类型与上一行显著不同（字符串 → 数值/日期）
 4. 生成 chunk：
    - 区域 ≤ 30 行：一个 chunk（表头 + 全部行）
-   - 区域 > 30 行：按 20 行分组，每组 chunk 头部重复表头
+   - 区域 > 30 行：按 12 行分组，每组 chunk 头部重复表头
    - 每个 chunk 的 text 渲染为「表头: 值」的键值对形式，而非 CSV
 5. locator 记录 sheet + range；行级 chunk 额外记录 row_index
 6. 合并单元格：值挂在左上角，其余单元格写入 merged_from 引用，
@@ -93,6 +93,13 @@ document
 
 而不是 `住所 | 全角20文字以内 | 必須 | ...`——后者在检索「住所 必須」时匹配度低，且人读起来也不像规格。
 
+**大规模下的保存原则（A-02：60,000 册）**：
+
+- 参与 embedding 的 chunk 约 **1,200 万**（每册 200）。行级证据可达 **1.44 亿**，但不落库，用 `Sheet!Range` 从压缩 artifact 按需展开。
+- **只嵌入父 chunk（12 行左右的表块）**。子块（1 行）用于引用与高亮，不持有 embedding。UI 分开展示「chunk 200 / 引用位置 2,400」。
+- 单元格不进 `doc_node`（会到 17.3 亿行）。只保留 Document / Sheet / Section / Region。
+- `kb.chunk` 按 `project_id` 分 32~64 区（05 §1.4）。
+
 ### 日语文本的三个技术细节
 
 **1）长度单位不是「词数」**
@@ -105,7 +112,7 @@ document
 |---|---|---|
 | 匹配（索引/查询） | NFKC + 旧字体映射（髙→高、﨑→崎）+ 半角カナ→全角 | `tokenized` |
 | 展示 | 原文（NFC），不做任何替换 | `chunk.text` |
-| 证据校验 | 原文的原始字节哈希 | `evidence.quote_hash` |
+| 证据校验 | 原文（NFC）的 SHA-256 | `evidence.quote_hash` |
 
 绝不能用归一化后的文本做证据引用——用户点开原文看到的是 `髙橋`，报告里写着 `高橋`，信任瞬间归零。
 
@@ -147,8 +154,8 @@ query
 
 ```rust
 #[async_trait]
-pub trait RagProvider: Send + Sync {
-    fn capabilities(&self) -> RagCapabilities;
+pub trait RagProvider: Provider {
+    fn rag_capabilities(&self) -> RagCapabilities;
 
     async fn search(
         &self,
@@ -178,6 +185,8 @@ pub trait RagProvider: Send + Sync {
 
 注意 `ingest` **不在** Provider 接口里。摄取是引擎自己的流程（解析、切块、元数据都在引擎内），只有「写索引」这一动作下推给 Provider。否则换一个 RAG Provider 就要重写整个摄取管线。
 
+`Provider::capabilities` 返回通用能力集合，`rag_capabilities` 返回 RAG 专有能力。分开命名是因为 trait 继承时返回类型会冲突。
+
 `RagCapabilities` 必须包含：`semantic / fulltext / hybrid / rerank / metadata_filter / graph_assist / evidence_locator`，未实现的能力在能力矩阵里显示 `Unsupported`，调用时返回 `CAPABILITY_UNSUPPORTED` 而不是静默降级。
 
 ### 失败模式
@@ -192,7 +201,8 @@ pub trait RagProvider: Send + Sync {
 
 ### 验收
 
-- 200 页 PDF + 50 sheet 的 XLSX 导入后，任取 50 个问题，top-5 命中率 ≥ 85%，且 100% 结果可跳转到原文。
+- 200 页 PDF + 50 sheet 的 XLSX 导入后，60 题（词级 / 部分一致 / 标识符外字 各 20）的 recall@10 ≥ 0.85。全部结果都带 locator，人工核验中 95% 以上能打开正确位置。
+- 1,200 万 chunk 规模下检索 P95 < 2.0 秒（`ja/reference/scale-model.md` §8）。
 - 任一 chunk 都能反查到 `document_revision` 与 `parse_run`。
 - 删除文档后，检索不再返回其 chunk（逻辑删除立即生效，物理删除异步）。
 
@@ -220,12 +230,14 @@ PG 是权威源（ADR-002），Neo4j 是投影。写入路径：
 fact accepted
   → normalize to entity/relationship rows (PG)
   → outbox event
-  → projector: MERGE (e:Entity {project_id, entity_id})
+  → projector: MERGE (e:Entity {uid, project_id, entity_id})
                MERGE (a)-[r:CALLS {rel_id}]->(b)
                ON CREATE / SET r.resolution, r.confidence, r.revision
 ```
 
 Neo4j 节点只存「查询需要的属性」：`entity_id / project_id / entity_type / name / qualified_name / revision / resolution`。**不存大文本**，需要正文时回 PG 取。
+
+**chunk 不投影**。1,200 万节点，对影响分析没有贡献。RAG 证据留在 PG 的 `kb.chunk` 与 `kb.evidence`。
 
 ### 方言约束：只用 Cypher 5 子集
 
@@ -268,7 +280,7 @@ MATCH p = (n)-[:CALLS*1..8]->(m) RETURN p
 ```rust
 // 唯一允许的构造方式
 let rel = ontology.relationship_type(&req.rel_type)?; // 枚举校验，非白名单直接报错
-let cypher = format!("MATCH (a:Entity {{project_id:$pid, entity_id:$sid}})-[r:{}]->(b) ...", rel.as_cypher_ident());
+let cypher = format!("MATCH (a:Entity {{uid:$uid}})-[r:{}]->(b) ...", rel.as_cypher_ident());
 // rel.as_cypher_ident() 只返回注册表中存在的标识符，且经 [A-Z_]+ 正则校验
 ```
 
@@ -885,7 +897,7 @@ call(agent_run, capability_name, input)
 | 删除项目数据 | **是** | 不可逆 |
 | 执行正式环境测试 | **是** | 有外部副作用 |
 | 发布 MCP Tool | **是** | 对外暴露能力 |
-| 修改源代码 | **是**（首期直接禁止） | A-07 |
+| 修改源代码 | **禁止**（将来引入也必须审批） | A-07 |
 
 审批不是弹窗点「同意」，而是：`approval_request` 记录「谁、什么动作、什么参数摘要、依据是什么」，审批人看到 diff 后批准，全程留痕。
 
@@ -1117,6 +1129,8 @@ pub trait GraphProvider: Provider {
     async fn subgraph(&self, ctx: &ProviderCtx, q: SubgraphQuery) -> Result<Subgraph, ProviderError>;
 }
 ```
+
+> `upsert_*` 仅用于**投影**。业务写入走 `store` 写 PG，再由 Outbox 投影。把 `GraphProvider` 当业务写入口，等于违反 ADR-002。
 
 设计取舍：
 

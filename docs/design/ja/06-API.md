@@ -1,5 +1,7 @@
 # 第 6 部：API 設計
 
+> リクエスト/レスポンスの詳細な契約は `detail/04-api-contract.md` を正とする。本稿は一覧と規約の全体像を示す。**ID 表記規約（全リソース UUID、`code` は表示用）は `detail/04` §0.2、`doc_type` 列挙は同 §0.3 が正**。
+
 ## 1. 共通規約
 
 | 項目 | 規約 |
@@ -46,6 +48,11 @@
 | `BUDGET_` | 上限超過 | `BUDGET_TOKENS_EXCEEDED` |
 | `JOB_` | ジョブ | `JOB_CANCELLED` |
 | `POLICY_` | 方針による拒否 | `POLICY_APPROVAL_REQUIRED` |
+| `AGENT_` | Agent 権限 | `AGENT_CAPABILITY_DENIED` |
+| `EVIDENCE_` | 証拠の整合 | `EVIDENCE_QUOTE_MISMATCH` |
+| `SCHEMA_` | 出力 Schema 検証 | `SCHEMA_VIOLATION` |
+
+`CAPABILITY_NOT_FOUND` / `CAPABILITY_UNSUPPORTED` は `CAPABILITY_` に含まれる。全コードの status / 再試行可否は `detail/04-api-contract.md` §0.1 を正とする。
 
 `PROVIDER_*` かつ `retryable=true` の場合は `Retry-After` を付ける。
 
@@ -70,6 +77,7 @@
 | メソッド | パス | 説明 | 権限 |
 |---|---|---|---|
 | POST | `/projects/{pid}/documents:upload-url` | presigned URL 発行 | `document:write` |
+| POST | `/projects/{pid}/documents:bulk-import` | マニフェストによる一括取込（非同期。部分成功） | `document:write` |
 | POST | `/projects/{pid}/documents` | 登録（アップロード後） | `document:write` |
 | GET | `/projects/{pid}/documents` | 一覧（type/domain/status） | `document:read` |
 | GET | `/documents/{did}` | 詳細 + 現行改版 | `document:read` |
@@ -117,6 +125,11 @@
 | GET | `/impacts/{iid}/items?level=&resolution=` | 影響項目 | `impact:read` |
 | GET | `/impacts/{iid}/graph` | グラフデータ（Cytoscape 形式） | `impact:read` |
 | POST | `/impacts/{iid}/reports` | Markdown/PDF 生成 | `impact:read` |
+| POST | `/projects/{pid}/change-inquiries` | **変更影響の単独問合せ**（非同期 + 分割 SSE） | `impact:run` |
+| GET | `/change-inquiries/{qid}` | 5 セクションの取得（section ごとにカーソル） | `impact:read` |
+| GET | `/projects/{pid}/change-inquiries` | 自分の問合せ履歴 | `impact:read` |
+| POST | `/change-inquiries/{qid}:rerun` | 同じ質問で再実行（新しい `impact_id`） | `impact:run` |
+| GET | `/change-inquiries/{qid}/report.md` | Markdown 出力（共有・チケット添付） | `impact:read` |
 
 ### 2.6 Test
 
@@ -177,7 +190,7 @@ Content-Type: application/json
   "query": "住所チェックの桁数と文字種",
   "mode": "hybrid",
   "filters": {
-    "doc_types": ["DETAILED_DESIGN", "DETAILED_SPEC"],
+    "doc_types": ["DETAILED_DESIGN", "UI_SPEC"],
     "business_domain": "user_management",
     "revision_id": null
   },
@@ -193,9 +206,9 @@ Content-Type: application/json
   "degraded": [],
   "lexical_mode": "BOTH",
   "results": [{
-    "chunk_id": "CH-9a1c...",
-    "document": {"id": "DOC-0012", "title": "ユーザ管理機能 詳細設計書", "doc_type": "DETAILED_DESIGN"},
-    "revision": {"id": "REV-0007", "source_revision": "svn-18422"},
+    "chunk_id": "c4b1...",
+    "document": {"id": "d1a2...", "title": "ユーザ管理機能 詳細設計書", "doc_type": "DETAILED_DESIGN"},
+    "revision": {"id": "r9c3...", "source_revision": "svn-18422"},
     "locator": {"kind": "xlsx", "sheet": "画面項目定義", "range": "C12:F12"},
     "score": 0.0312,
     "sources": ["vector", "fulltext", "graph"],
@@ -224,13 +237,13 @@ Content-Type: application/json
 
 ```json
 {
-  "job_id": "JOB-01J9Z...",
-  "impact_id": "IMP-2026-0007",
+  "job_id": "j3d9...",
+  "impact_id": "i3d7...",
   "status": "QUEUED",
   "links": {
-    "self": "/api/v1/impacts/IMP-2026-0007",
-    "job": "/api/v1/jobs/JOB-01J9Z...",
-    "events": "/api/v1/jobs/JOB-01J9Z.../events"
+    "self": "/api/v1/impacts/i3d7...",
+    "job": "/api/v1/jobs/j3d9...",
+    "events": "/api/v1/jobs/j3d9.../events"
   }
 }
 ```
@@ -238,15 +251,20 @@ Content-Type: application/json
 SSE：
 
 ```text
+id: 41
 event: progress
 data: {"phase":"TRAVERSE","done":1240,"total":null,"message":"depth 3"}
 
+id: 42
 event: progress
 data: {"phase":"EVIDENCE","done":18,"total":37,"message":"matching documents"}
 
+id: 43
 event: done
-data: {"impact_id":"IMP-2026-0007","stats":{"total":37,"unresolved":1},"truncated":{"hubs":1}}
+data: {"impact_id":"i3d7...","stats":{"total":37,"unresolved":1},"truncated":{"hubs":1}}
 ```
+
+> 全イベントに単調増加の `id` を付け、再接続は `Last-Event-ID` で再開する。ハートビート `: ping` は 20 秒ごと。詳細は `detail/04-api-contract.md` §3.2。
 
 ### 3.3 テスト実行
 
@@ -255,8 +273,8 @@ POST /api/v1/projects/8f2c.../test-runs
 Content-Type: application/json
 
 {
-  "name": "IMP-2026-0007 回帰",
-  "case_ids": ["TC-2026-0118", "TC-2026-0119"],
+  "name": "影響分析 i3d7 の回帰",
+  "case_ids": ["tc18...", "tc19..."],
   "environment": {"id": "env-stg-01", "base_url": "https://stg.example.internal"},
   "runner": {"type": "playwright", "browser": "chromium", "headless": true},
   "retry": {"max": 1, "on": ["TIMEOUT", "NETWORK"]}
@@ -264,16 +282,16 @@ Content-Type: application/json
 ```
 
 ```json
-{"test_run_id": "RUN-2026-0112", "status": "QUEUED",
- "case_count": 23, "estimated_duration_sec": 420}
+{"test_run_id": "t5e6...", "status": "QUEUED",
+ "case_count": 2, "estimated_duration_sec": 40}
 ```
 
 単回結果：
 
 ```json
 {
-  "execution_id": "EXE-01JA...",
-  "test_case_id": "TC-2026-0118",
+  "execution_id": "x8e2...",
+  "test_case_id": "tc18...",
   "status": "FAILED",
   "failure_kind": "ASSERTION",
   "duration_ms": 8420,
@@ -293,6 +311,64 @@ Content-Type: application/json
 
 ---
 
+## 3.4 変更影響の単独問合せ（Q-01）
+
+「XX を変更したら何が起きるか」を 1 回の問いで、**概要 / 画面 / 文書 / コード / テスト**の 5 セクションに分けて返す。中身は `POST /projects/{pid}/impacts` と**同じ ImpactReport** であり、`impact_id` を返すので A-04 / A-05 へ遷移できる。
+
+```http
+POST /api/v1/projects/8f2c.../change-inquiries
+Idempotency-Key: sha256:9f1c...
+Content-Type: application/json
+
+{
+  "question": "住所の入力桁数を全角20文字から30文字に変えたい",
+  "input": {"kind": "NATURAL_LANGUAGE"},
+  "mode": "FULL",
+  "include": ["screens", "documents", "code", "tests", "evidence"]
+}
+```
+
+```json
+202
+{
+  "inquiry_id": "q7b2...",
+  "impact_id": "i3d7...",
+  "job_id": "j6...",
+  "status": "QUEUED",
+  "links": {
+    "self": "/api/v1/change-inquiries/q7b2...",
+    "events": "/api/v1/jobs/j6.../events"
+  }
+}
+```
+
+分割 SSE（`summary` を最初に出す）：
+
+```text
+id: 52
+event: partial
+data: {"section":"summary","data":{"risk":{"score":0.62,"level":"MEDIUM"},"counts":{"screens":3,"documents":7,"code":12,"tests":9},"degraded":[]}}
+
+id: 53
+event: partial
+data: {"section":"screens","data":{"items":[],"total":3,"has_more":false}}
+
+id: 57
+event: done
+data: {"inquiry_id":"q7b2...","impact_id":"i3d7...","status":"SUCCEEDED","latency_ms":8420}
+```
+
+| 約束 | 内容 |
+|---|---|
+| 推測しない | シードが曖昧なら `NEEDS_CLARIFICATION` を返し、候補と `reason` を出す。勝手に 1 つに絞らない |
+| 空と失敗を区別 | 未索引・未解析は `degraded[]` に理由を出す。「影響なし」と誤読させない |
+| テストは提案まで | 「計画に入れる」は `POST /impacts/{iid}/test-plans:derive`。**実行は別操作**（D-04） |
+| 速度 | `summary` まで 8s 以内（目標 3s）、全体は受入 120s / 目標 90s。`QUICK` は受入 15s（`detail/08` §9） |
+
+> リクエスト/レスポンスの完全な契約、4 分類への投影、降格、受入 14 ケースは `detail/08-change-inquiry.md` を正とする。
+
+---
+
 ## 4. 権限モデル
 
 ### 4.1 ロール × 行為
@@ -304,6 +380,7 @@ Content-Type: application/json
 | 検索 / 証拠 | 読 | 読 | 読 | 読 | 読 |
 | コード同期 / 解析 | 書 | 書 | 書 | 読 | 読 |
 | 影響分析実行 | 書 | 書 | 書 | 読 | 読 |
+| 変更影響問合せ（Q-01） | 書 | 書 | 書 | 書 | 読 |
 | テスト資産編集 | 書 | 書 | 読 | 書 | 読 |
 | テスト実行 | 書 | 書 | 読 | 書 | 読 |
 | ケース承認 | 書 | 書 | — | 書 | — |
@@ -314,7 +391,7 @@ Content-Type: application/json
 
 ### 4.2 データ水準の制約
 
-1. **プロジェクト分離**：全クエリに `project_id` を強制注入。フロントから来た値を信頼しない。
+1. **プロジェクト分離**：全クエリに `project_id` を強制注入。本文・クエリの `project_id` は受け付けない。パス `/projects/{pid}/…` の `{pid}` は「スコープ宣言」として扱い、セッションの許可範囲と照合して一致した場合だけ ctx へ採用する。不一致は 404（403 にしない）、本文に `project_id` が残っていれば破棄し乖離時は `VALIDATION_SCHEMA`（`detail/04-api-contract.md` §7）。
 2. **文書 ACL**：`document.acl_groups` とユーザーグループの積集合。交わらなければ検索結果に出さない（SQL 層でフィルタ）。
 3. **Agent の降格**：有効権限 = `agent.capabilities ∩ 起動ユーザー権限 ∩ プロジェクト範囲`。
 4. **重要操作の二段確認**：プロジェクト削除、Ontology 公開、正式環境テストは `X-Confirm-Action: <resource_id>` + 承認フロー。

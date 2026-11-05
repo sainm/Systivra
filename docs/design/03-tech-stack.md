@@ -105,6 +105,13 @@ Deploy      Docker Compose · MinIO (S3 兼容) · OpenTelemetry Collector
 2. HNSW 索引构建内存需求高，`maintenance_work_mem` 不足会退化。大项目重建索引要单独排期。
 3. 过滤 + ANN 的召回问题：必须 `SET LOCAL hnsw.iterative_scan = relaxed_order`，否则「只要这个项目的 chunk」会把候选集过滤到几乎为空。
 
+**大规模下的额外约束（A-02：embedding chunk 1,200 万）**：
+
+- 1,200 万 × 1024 维 × 4 B = 49 GB；HNSW 索引 75~100 GB。单索引构建时内存不够。
+- 按 `project_id` 分 **32~64 个分区**，每个分区独立 HNSW。查询固定 `project_id`，分区裁剪有效。
+- 保留 `halfvec` 把向量减半、再用 rerank 补精度的选项。
+- 该规模下搜索 P95 目标为 2.0 秒（`ja/reference/scale-model.md` §8）。
+
 ### 3.3 代码分析
 
 | 层次 | 技术 | 为什么不用别的 |

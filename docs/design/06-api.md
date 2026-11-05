@@ -72,6 +72,7 @@
 | 方法 | 路径 | 说明 | 权限 |
 |---|---|---|---|
 | POST | `/projects/{pid}/documents:upload-url` | 获取预签名上传地址 | `document:write` |
+| POST | `/projects/{pid}/documents:bulk-import` | 按清单批量导入（异步，允许部分成功） | `document:write` |
 | POST | `/projects/{pid}/documents` | 登记文档（上传完成后） | `document:write` |
 | GET | `/projects/{pid}/documents` | 文档列表（过滤：type/domain/status） | `document:read` |
 | GET | `/documents/{did}` | 文档详情 + 当前修订 | `document:read` |
@@ -281,8 +282,8 @@ Content-Type: application/json
 {
   "test_run_id": "RUN-2026-0112",
   "status": "QUEUED",
-  "case_count": 23,
-  "estimated_duration_sec": 420
+  "case_count": 2,
+  "estimated_duration_sec": 40
 }
 ```
 
