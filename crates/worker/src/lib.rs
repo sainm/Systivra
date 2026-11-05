@@ -8,6 +8,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod text;
+
 /// worker の 1 反復。`P1-JOB-01` で実装する。
 pub async fn tick() {
     // TODO(P1-JOB-01): scheduler ロールで job を取り、

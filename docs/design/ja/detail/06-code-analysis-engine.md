@@ -109,6 +109,33 @@
 
 `line_offsets: Vec<u64>` を `document_revision` と同じ要領で **解析 artifact（Parquet / オブジェクトストレージ）に保存**し、DB の `code.source_file` には `line_offsets_key` だけ持たせる。Shift_JIS の 2 バイト文字を 1 文字として数えて行をずらすと、証拠を開いても該当箇所が出ない（R-22）。
 
+### 4.1.1 偏移の作り方（往復比較では足りない）
+
+**「復号して再符号化し、元のバイト列と一致したら偏移を出す」では実案件で破綻する。**
+
+CP932 には同じ Unicode に写像される重複バイト列がある。`髙`（U+9AD9）は `0xEEE0` と `0xFBFC` の両方が有効で、`encoding_rs` の再符号化は片方に寄せる。すると**中身が正しいのに往復が一致しない**ファイルが出る。`髙` は日本人名で頻出するので、これは例外ではなく通常ケースである。
+
+正しい作り方は **元バイト列を先頭から歩く**こと。
+
+```text
+pos = 0
+for ch in decoded_text.chars():
+    len = 元ファイルで ch が占めるバイト数
+    char_offset[ch] = pos
+    if ch == '\n': line_offset.push(pos + len)
+    pos += len
+if pos != 元ファイル長: 偏移を出さない（exact = false）
+```
+
+`len` の決め方は 2 段：
+
+1. **速い道**：`encode(ch)` の結果が `body[pos..]` の先頭と一致すれば、その長さ。
+2. **遅い道**：一致しない場合（重複写像・外字）、`body[pos..pos+n]` を復号して `ch` 1 文字になる `n` を 1〜4 の範囲で探す。
+
+速い道で大半が処理でき、遅い道に入るのは重複写像の文字だけ。1 文字でも決められなければ**そのファイルの偏移は一切出さない**（`exact = false`）。もっともらしい数字を返すと、証拠が別の場所を指したまま静かに通る。
+
+実測（Phase 0、`crates/worker/src/text/`）：CP932 / EUC-JP / UTF-8 / UTF-8 BOM の 4 種、外字・半角カナ・JSP scriptlet 混在、914KB / 9,761 行まで **全件 `exact = true`**。壊れたバイト列のみ `ENCODING_UNDETECTED`。debug ビルドで約 89ms / 914KB。
+
 ### 4.2 正規化の二軌
 
 - **保存・証拠**：原文を **NFC** で保持。`quote_hash = sha256(NFC(quote))`。
