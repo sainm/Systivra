@@ -152,6 +152,10 @@ P1-ENV-01 Cargo workspace / compose / CI
 
 **RLS**：`project_id` を持つ全表に `USING (project_id = current_setting('app.project_id')::uuid)` を適用。アプリはトランザクション開始時に `SET LOCAL app.project_id = …` を**サーバー側コンテキストから**設定する。リクエスト本文の値は使わない。
 
+**実装済み（2026-11-05）**：`migrations/001_core.sql` / `002_core_ops.sql` / `deployment/postgres/roles.sql`。`scripts/verify-db.sh` が上表の項目を機械で確認する（9 アサーション、失敗時は非ゼロ終了）。
+
+> **DB ロールは 3 つ**。`SELECT … FOR UPDATE SKIP LOCKED` が UPDATE 権限を要求するため、API と worker を同じロールにできない（`detail/02` §0.1）。`systivra_scheduler` だけが `BYPASSRLS` を持つ。
+
 ### 5.2 `P1-API-01` 認証・認可・エラー
 
 - ブラウザ：`HttpOnly + SameSite=Lax` セッション Cookie。プログラム：`Authorization: Bearer <pat>`（`core.api_token.token_hash` にハッシュ保存）。

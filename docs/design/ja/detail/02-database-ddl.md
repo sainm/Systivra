@@ -16,7 +16,21 @@
 | JSON | `jsonb`。スキーマは `contracts/` の JSON Schema で検証 |
 | 命名 | テーブルは複数形にしない（`document`, `chunk`）。中間表は `a_b` |
 | 索引名 | `{table}_{column}_{kind}`。例 `chunk_fts_idx` |
-| パーティション | `project_id` ハッシュ（chunk / embedding）、`revision_id`（fact）、月次（audit / execution） |
+| パーティション | `HASH(id)`（chunk）、`HASH(chunk_id)`（embedding）、`RANGE(occurred_at)` 月次（audit）。**`project_id` はパーティションキーにしない**（§6）。`fact` / `test_execution` は分区しない |
+
+### 0.1 DB ロール（3 つ。API と worker を混ぜない）
+
+`SELECT … FOR UPDATE SKIP LOCKED` は **UPDATE 権限を要求する**。API に UPDATE を渡すとジョブ行を書き換えられてしまい、worker に渡さないとジョブを取り出せない。したがって役割を分ける。
+
+| ロール | 用途 | 主な権限 | 持たせない権限 |
+|---|---|---|---|
+| `systivra_app` | API プロセス | `SELECT` / `INSERT`（全 `core` 表）、`UPDATE` は業務表のみ | `core.job` の `UPDATE`（取り出しは worker の仕事） |
+| `systivra_worker` | worker / projector | `core.job` / `job_checkpoint` / `outbox_event` / `outbox_dead_letter` の `UPDATE` | 業務表の書き込み（store 経由に限る） |
+| `systivra_scheduler` | ジョブ取り出しのみ | `core.job` の `UPDATE` + **`BYPASSRLS`** | それ以外の全テーブル |
+
+- `core.audit_log` は**どれにも `UPDATE` / `DELETE` を渡さない**。追記専用を権限で担保する。
+- RLS はロールを問わず効く。`systivra_app` / `systivra_worker` は必ず `SET LOCAL app.project_id` を設定する。全プロジェクト横断で取り出す必要があるのは**取り出しクエリだけ**なので、そこだけ `BYPASSRLS` の `systivra_scheduler` に閉じる（`detail/09` §3 の 2 プロセス構成と対応）。
+- ロール名は環境で変わりうるため、マイグレーションの `REVOKE` は `pg_roles` に存在するときだけ適用する（`002_core_ops.sql` の `DO` ブロック）。
 
 ---
 
