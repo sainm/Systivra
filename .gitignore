@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+
+# Rust
+target/
+
+# Node / frontend
+node_modules/
+dist/
+.vite/
+
+# 環境設定・秘密情報
+.env
+.env.*
+!.env.example
+
+# ローカルツール / エージェントデータ
+.workbuddy/
+.idea/
+.vscode/
+
+# ログ・テスト成果物
+*.log
+test-results/
+playwright-report/
+coverage/
