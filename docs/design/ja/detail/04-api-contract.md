@@ -64,7 +64,7 @@
 |---|---|
 | リソース ID | **すべて UUID**（`id` / `*_id`）。DB の主キーと 1 対 1。例では `d1a2...` のように UUID を省略表記してよい |
 | 表示用コード | `code` 列を持つ表（`core.workspace` / `core.project` / `test.test_plan` / `test.test_scenario` / `test.test_case` / `ai.agent` / `ai.workflow_def`）に限り、レスポンスで `code` を `id` と併記してよい。**API の参照は UUID で行い、`code` を ID として送らない** |
-| 疑似 ID の禁止 | `code` 列の無い表（`kb.document` / `kb.document_revision` / `kb.chunk` / `kb.evidence` / `core.job` / `test.test_run` / `test.test_execution` / `ops.provider` / 影響項目）に `DOC-0012` / `CH-9a1c` / `IMP-2026-0007` のような接頭辞付き ID を使わない（**初期版の本稿がこれに該当していた**） |
+| 疑似 ID の禁止 | `code` 列の無い表（`corpus.document` / `corpus.document_revision` / `corpus.chunk` / `corpus.evidence` / `core.job` / `test.test_run` / `test.test_execution` / `ops.provider` / 影響項目）に `DOC-0012` / `CH-9a1c` / `IMP-2026-0007` のような接頭辞付き ID を使わない（**初期版の本稿がこれに該当していた**） |
 | 非リソース ID | `search_id` / `trace_id` / SSE イベント `id` は ULID または単調整数でよい（表の主キーではないため） |
 | 環境・Provider 名 | `environment.id`（`test.test_run.environment` 内の jsonb）と `ops.provider.impl_name` は論理名文字列。UUID ではないが、レスポンスの `id` フィールドとは混ぜない |
 
@@ -83,13 +83,16 @@ REQUIREMENT / BASIC_DESIGN / DETAILED_DESIGN / UI_SPEC / DB_SPEC /
 TEST_SPEC / API_SPEC / MANUAL / OTHER
 ```
 
-- `kb.document.doc_type` と `documents:bulk-import` のマニフェスト、検索の `filters.doc_types` はすべてこの列挙を使う。
+- `corpus.document.doc_type` と `documents:bulk-import` のマニフェスト、検索の `filters.doc_types` はすべてこの列挙を使う。
 - `DETAILED_SPEC` は**存在しない**（`06-API.md` の旧例示から削除）。詳細設計書は `DETAILED_DESIGN`、画面項目定義は `UI_SPEC`。
 - 未知の値は `VALIDATION_SCHEMA`。DB 側も `CHECK` で弾く（`detail/02-database-ddl.md`）。
 
 ---
 
 ## 1. Document
+
+> **Phase 1 実装範囲（2026-11-06）**: §1.1 / §1.1.1 / §1.2 / §1.4 / §1.6 / §1.7、§2.1〜§2.3、§3.1〜§3.3。
+> §1.3（bulk-import）と §1.5（構造木）は Phase 2。
 
 ### 1.1 アップロード URL 発行
 
@@ -118,6 +121,20 @@ Idempotency-Key: upload:user_edit.xlsx:18422
 ```
 
 **備考**：`object_key` は次の 1.2 で渡す。この API は DB に document を書かない（アップロード未完了を避けるため）。
+
+### 1.1.1 ローカル原本 PUT（Phase 1 追加）
+
+Phase 1 の `upload_url` は S3 presigned URL ではなく、API が発行する署名付きローカル URL になる。
+返された URL に PDF のバイト列を `PUT` する。
+
+```http
+PUT /api/v1/uploads/{token}
+Content-Type: application/pdf
+```
+
+- `token` は 1.1 の署名情報。改竄・期限切れは 401、空・PDF でない・サイズ超過は 400。
+- 成功は 204。DB には document を書かない。
+- 本番は S3 presigned URL に置き換えるが、`upload_url` / `object_key` の契約は変えない。
 
 ### 1.2 文書登録
 
@@ -160,7 +177,9 @@ POST /api/v1/projects/{pid}/documents
 
 **errors**：`CONFLICT_ALREADY_IMPORTED`（同一 `content_hash`）、`VALIDATION_SCHEMA`（`doc_type`）。
 
-### 1.3 一括取込
+### 1.3 一括取込（Phase 2）
+
+> Phase 1 では未実装。`08-実装計画.md` の大規模取込（マニフェスト、部分成功、再開）で追加する。
 
 ```http
 POST /api/v1/projects/{pid}/documents:bulk-import
@@ -225,7 +244,9 @@ GET /api/v1/projects/{pid}/documents
 
 **速度**：`include=summary` は `sheet_count` / `chunk_count` / `parse_status` のみ。`include=detail` を指定した場合のみ数式・領域数を返す。60,000 件の全フィールドを返さない。
 
-### 1.5 構造木（遅延読み込み）
+### 1.5 構造木（遅延読み込み、Phase 2）
+
+> Phase 1 では未実装。画面は PDF ビューアとページ位置で代替している。
 
 ```http
 GET /api/v1/documents/{did}/tree?revision_id=r9c3...&parent=ROOT&limit=100
@@ -245,7 +266,17 @@ GET /api/v1/documents/{did}/tree?revision_id=r9c3...&parent=ROOT&limit=100
 
 `ROOT` は最上位。`child_count > 0` のノードのみ次の呼び出しで開く。**全ノードを一度に返さない**。
 
-### 1.6 解析開始
+### 1.6 原本取得（Phase 1 追加）
+
+```http
+GET /api/v1/documents/{did}/content
+```
+
+PDF 原本のバイト列を `Content-Type: application/pdf` で返す。認可は `document:read`。
+Phase 1 のビューアが `locator.page` を開くために使う。原本の保存先は Provider の実装
+（Phase 1 はローカルファイル、本番は S3）であり、この契約は保存方式に依存しない。
+
+### 1.7 解析開始
 
 ```http
 POST /api/v1/documents/{did}/revisions/{rid}:parse
@@ -427,6 +458,36 @@ data: {"status":"SUCCEEDED_WITH_ERRORS","files_failed":3,"eta_seconds":0}
 - `id` は単調増加。再接続時は `Last-Event-ID` から再送する。
 - ハートビート：20 秒ごとに空行 `: ping`。プロキシの切断を防ぐ。
 - `done` / `error` で終了。以降は接続を閉じる。
+
+### 3.3 監査照会（Phase 1 追加）
+
+```http
+GET /api/v1/projects/{pid}/audit-logs?limit=50
+```
+
+```json
+200
+{
+  "items": [
+    {
+      "id": 101,
+      "actor_type": "USER",
+      "actor_id": "33333333-3333-4333-8333-333333333333",
+      "action": "document.register",
+      "target_type": "document",
+      "target_id": "d1a2...",
+      "result": "SUCCESS",
+      "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+      "detail": {"title": "ユーザ管理機能 詳細設計書"},
+      "occurred_at": "2026-11-05T12:00:00Z"
+    }
+  ]
+}
+```
+
+- 権限は `audit:read`（`06-API.md` §4.1）。
+- Phase 1 は `limit` のみ。`actor` / `action` / `from` の絞り込みは Phase 2。
+- 監査ログは追記専用で、UPDATE / DELETE は DB 権限でも拒否する。
 
 ---
 

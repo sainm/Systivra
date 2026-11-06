@@ -1,0 +1,1928 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Systivra API",
+    "description": "Phase 1 walking skeleton: document ingestion and evidence-backed search.",
+    "license": {
+      "name": ""
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/v1/auth/login": {
+      "post": {
+        "tags": [
+          "crate::routes::auth"
+        ],
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "tags": [
+          "crate::routes::auth"
+        ],
+        "operationId": "logout",
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "tags": [
+          "crate::routes::auth"
+        ],
+        "operationId": "me",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/chunks/{cid}": {
+      "get": {
+        "tags": [
+          "crate::routes::knowledge"
+        ],
+        "operationId": "chunk",
+        "parameters": [
+          {
+            "name": "cid",
+            "in": "path",
+            "description": "Chunk ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChunkResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/documents/{did}": {
+      "get": {
+        "tags": [
+          "crate::routes::document"
+        ],
+        "operationId": "detail",
+        "parameters": [
+          {
+            "name": "did",
+            "in": "path",
+            "description": "Document ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "crate::routes::document"
+        ],
+        "operationId": "delete_document",
+        "parameters": [
+          {
+            "name": "did",
+            "in": "path",
+            "description": "Document ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/documents/{did}/content": {
+      "get": {
+        "tags": [
+          "crate::routes::document"
+        ],
+        "operationId": "content",
+        "parameters": [
+          {
+            "name": "did",
+            "in": "path",
+            "description": "Document ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "PDF bytes"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/documents/{did}/revisions/{rid}:parse": {
+      "post": {
+        "tags": [
+          "crate::routes::document"
+        ],
+        "operationId": "parse",
+        "parameters": [
+          {
+            "name": "did",
+            "in": "path",
+            "description": "Document ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "rid",
+            "in": "path",
+            "description": "Revision ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ParseAcceptedResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/evidence/{eid}": {
+      "get": {
+        "tags": [
+          "crate::routes::knowledge"
+        ],
+        "operationId": "evidence",
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "description": "Evidence ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{jid}": {
+      "get": {
+        "tags": [
+          "crate::routes::job"
+        ],
+        "operationId": "job",
+        "parameters": [
+          {
+            "name": "jid",
+            "in": "path",
+            "description": "Job ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{jid}/events": {
+      "get": {
+        "tags": [
+          "crate::routes::job"
+        ],
+        "operationId": "events",
+        "parameters": [
+          {
+            "name": "jid",
+            "in": "path",
+            "description": "Job ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server-sent events"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{pid}/audit-logs": {
+      "get": {
+        "tags": [
+          "crate::routes::document"
+        ],
+        "operationId": "audit_logs",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditListResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{pid}/documents": {
+      "get": {
+        "tags": [
+          "crate::routes::document"
+        ],
+        "operationId": "list",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentListResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "crate::routes::document"
+        ],
+        "operationId": "register",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterDocumentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterDocumentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{pid}/documents:upload-url": {
+      "post": {
+        "tags": [
+          "crate::routes::document"
+        ],
+        "operationId": "create_upload_url",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadUrlRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadUrlResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{pid}/knowledge/search": {
+      "post": {
+        "tags": [
+          "crate::routes::knowledge"
+        ],
+        "operationId": "search",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{pid}/me": {
+      "get": {
+        "tags": [
+          "crate::routes::project"
+        ],
+        "summary": "このプロジェクトでの自分の立場と、書ける操作の一覧。",
+        "operationId": "project_me",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectMeResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/uploads/{token}": {
+      "put": {
+        "tags": [
+          "crate::routes::upload"
+        ],
+        "operationId": "receive",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "Signed upload token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/pdf": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AuditEntry": {
+        "type": "object",
+        "required": [
+          "id",
+          "actor_type",
+          "actor_id",
+          "action",
+          "result",
+          "detail",
+          "occurred_at"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "actor_id": {
+            "type": "string"
+          },
+          "actor_type": {
+            "type": "string"
+          },
+          "detail": {},
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "result": {
+            "type": "string"
+          },
+          "target_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "trace_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "AuditListResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuditEntry"
+            }
+          }
+        }
+      },
+      "ChunkId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "検索単位の chunk。"
+      },
+      "ChunkNeighbors": {
+        "type": "object",
+        "required": [
+          "prev",
+          "next"
+        ],
+        "properties": {
+          "next": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChunkId"
+            }
+          },
+          "parent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "prev": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChunkId"
+            }
+          }
+        }
+      },
+      "ChunkResponse": {
+        "type": "object",
+        "required": [
+          "chunk_id",
+          "chunk_type",
+          "text",
+          "locator",
+          "token_count",
+          "char_count",
+          "neighbors",
+          "parse_run"
+        ],
+        "properties": {
+          "char_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "chunk_id": {
+            "$ref": "#/components/schemas/ChunkId"
+          },
+          "chunk_type": {
+            "type": "string"
+          },
+          "locator": {},
+          "neighbors": {
+            "$ref": "#/components/schemas/ChunkNeighbors"
+          },
+          "parse_run": {
+            "$ref": "#/components/schemas/ParseRunRef"
+          },
+          "text": {
+            "type": "string"
+          },
+          "token_count": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "DocType": {
+        "type": "string",
+        "enum": [
+          "REQUIREMENT",
+          "BASIC_DESIGN",
+          "DETAILED_DESIGN",
+          "UI_SPEC",
+          "DB_SPEC",
+          "TEST_SPEC",
+          "API_SPEC",
+          "MANUAL",
+          "OTHER"
+        ]
+      },
+      "DocumentDetail": {
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "doc_type",
+          "title",
+          "acl_groups",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "acl_groups": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "business_domain": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "current_revision": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RevisionSummary"
+              }
+            ]
+          },
+          "doc_type": {
+            "$ref": "#/components/schemas/DocType"
+          },
+          "id": {
+            "$ref": "#/components/schemas/DocumentId"
+          },
+          "project_id": {
+            "$ref": "#/components/schemas/ProjectId"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "DocumentId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "設計書 1 冊（ファイル 1 つ）。"
+      },
+      "DocumentListResponse": {
+        "type": "object",
+        "required": [
+          "items",
+          "has_more"
+        ],
+        "properties": {
+          "has_more": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DocumentSummary"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "DocumentSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "doc_type",
+          "sheet_count",
+          "page_count",
+          "chunk_count",
+          "parse_status",
+          "updated_at"
+        ],
+        "properties": {
+          "business_domain": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "chunk_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "current_revision_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RevisionId"
+              }
+            ]
+          },
+          "doc_type": {
+            "$ref": "#/components/schemas/DocType"
+          },
+          "id": {
+            "$ref": "#/components/schemas/DocumentId"
+          },
+          "page_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "parse_status": {
+            "type": "string"
+          },
+          "sheet_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "EvidenceId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "証拠。"
+      },
+      "EvidenceResponse": {
+        "type": "object",
+        "required": [
+          "evidence_id",
+          "source_type",
+          "locator",
+          "quote",
+          "quote_hash",
+          "context_before",
+          "context_after",
+          "resolution",
+          "confidence"
+        ],
+        "properties": {
+          "confidence": {
+            "type": "number",
+            "format": "float"
+          },
+          "context_after": {
+            "type": "string"
+          },
+          "context_before": {
+            "type": "string"
+          },
+          "document_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DocumentId"
+              }
+            ]
+          },
+          "document_title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evidence_id": {
+            "$ref": "#/components/schemas/EvidenceId"
+          },
+          "locator": {},
+          "mime_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "page_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "quote": {
+            "type": "string"
+          },
+          "quote_hash": {
+            "type": "string"
+          },
+          "resolution": {
+            "type": "string"
+          },
+          "revision_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RevisionId"
+              }
+            ]
+          },
+          "source_type": {
+            "type": "string"
+          }
+        }
+      },
+      "FieldError": {
+        "type": "object",
+        "description": "項目単位のエラー。`field` は JSON Pointer か API のフィールド名。",
+        "required": [
+          "field",
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "JobErrorItem": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "JobId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "非同期ジョブ。"
+      },
+      "JobLinks": {
+        "type": "object",
+        "required": [
+          "events"
+        ],
+        "properties": {
+          "events": {
+            "type": "string"
+          }
+        }
+      },
+      "JobProgress": {
+        "type": "object",
+        "required": [
+          "phase",
+          "files_done",
+          "files_total",
+          "cells_done",
+          "cells_total",
+          "chunks_done"
+        ],
+        "properties": {
+          "cells_done": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "cells_total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "chunks_done": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "files_done": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "files_total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "phase": {
+            "type": "string"
+          }
+        }
+      },
+      "JobResponse": {
+        "type": "object",
+        "required": [
+          "job_id",
+          "kind",
+          "status",
+          "progress",
+          "errors",
+          "links"
+        ],
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JobErrorItem"
+            }
+          },
+          "eta_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "job_id": {
+            "$ref": "#/components/schemas/JobId"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "links": {
+            "$ref": "#/components/schemas/JobLinks"
+          },
+          "progress": {
+            "$ref": "#/components/schemas/JobProgress"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobStatus"
+          }
+        }
+      },
+      "JobStatus": {
+        "type": "string",
+        "enum": [
+          "PENDING",
+          "QUEUED",
+          "RUNNING",
+          "WAITING_APPROVAL",
+          "SUCCEEDED",
+          "SUCCEEDED_WITH_ERRORS",
+          "FAILED",
+          "CANCELLED",
+          "TIMEOUT"
+        ]
+      },
+      "LoginRequest": {
+        "type": "object",
+        "description": "ログイン要求。パスワードは**ログに出さない**（`Debug` を実装しない）。",
+        "required": [
+          "login_id",
+          "password"
+        ],
+        "properties": {
+          "login_id": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        }
+      },
+      "LoginResponse": {
+        "type": "object",
+        "description": "ログイン成功の応答。セッション Cookie は `Set-Cookie` で返す。",
+        "required": [
+          "user_id",
+          "display_name",
+          "memberships"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "memberships": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MembershipSummary"
+            },
+            "description": "所属が 1 つも無い場合は空。画面は「プロジェクトがありません」を出す。"
+          },
+          "user_id": {
+            "$ref": "#/components/schemas/UserId"
+          }
+        }
+      },
+      "MeResponse": {
+        "type": "object",
+        "description": "`/me` の応答。",
+        "required": [
+          "user_id",
+          "display_name",
+          "memberships"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "memberships": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MembershipSummary"
+            }
+          },
+          "user_id": {
+            "$ref": "#/components/schemas/UserId"
+          }
+        }
+      },
+      "MembershipSummary": {
+        "type": "object",
+        "description": "所属 1 件。`/me` の応答に含める。",
+        "required": [
+          "project_id",
+          "project_code",
+          "project_name",
+          "role"
+        ],
+        "properties": {
+          "project_code": {
+            "type": "string",
+            "description": "表示用のキー。`project_id` の代わりに API へ渡さない（`detail/04` §0.2）。"
+          },
+          "project_id": {
+            "$ref": "#/components/schemas/ProjectId"
+          },
+          "project_name": {
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          }
+        }
+      },
+      "NextLinks": {
+        "type": "object",
+        "required": [
+          "parse"
+        ],
+        "properties": {
+          "parse": {
+            "type": "string"
+          }
+        }
+      },
+      "ParseAcceptedResponse": {
+        "type": "object",
+        "required": [
+          "job_id",
+          "status",
+          "mode"
+        ],
+        "properties": {
+          "job_id": {
+            "$ref": "#/components/schemas/JobId"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobStatus"
+          }
+        }
+      },
+      "ParseRunRef": {
+        "type": "object",
+        "required": [
+          "parser",
+          "parser_version"
+        ],
+        "properties": {
+          "parser": {
+            "type": "string"
+          },
+          "parser_version": {
+            "type": "string"
+          }
+        }
+      },
+      "Problem": {
+        "type": "object",
+        "description": "エラー応答の本体。",
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "trace_id"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldError"
+            }
+          },
+          "instance": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "title": {
+            "type": "string"
+          },
+          "trace_id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "description": "`https://systivra.example/errors/<CODE>`"
+          }
+        }
+      },
+      "ProjectId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "プロジェクト。テナント境界であり、RLS のスコープ。"
+      },
+      "ProjectMeResponse": {
+        "type": "object",
+        "description": "特定プロジェクトでの自分の立場。`GET /projects/{pid}/me`。\n\n所属していなければ 404 なので、この型が返る時点で `role` は必ずある。",
+        "required": [
+          "project_id",
+          "role",
+          "permissions"
+        ],
+        "properties": {
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "この画面で「書ける」操作の一覧。フロントがボタンを出し分けるのに使う。\n権限判定をフロントで再実装させないためのもの。"
+          },
+          "project_id": {
+            "$ref": "#/components/schemas/ProjectId"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          }
+        }
+      },
+      "RegisterDocumentRequest": {
+        "type": "object",
+        "required": [
+          "object_key",
+          "doc_type",
+          "title"
+        ],
+        "properties": {
+          "acl_groups": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "business_domain": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "doc_type": {
+            "$ref": "#/components/schemas/DocType"
+          },
+          "mime_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "object_key": {
+            "type": "string"
+          },
+          "source_revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "RegisterDocumentResponse": {
+        "type": "object",
+        "required": [
+          "document",
+          "next"
+        ],
+        "properties": {
+          "document": {
+            "$ref": "#/components/schemas/DocumentDetail"
+          },
+          "next": {
+            "$ref": "#/components/schemas/NextLinks"
+          }
+        }
+      },
+      "RevisionId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "文書の版。"
+      },
+      "RevisionSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "content_hash",
+          "status",
+          "acquired_at",
+          "file_size",
+          "mime_type",
+          "page_count",
+          "chunk_count",
+          "parse_status"
+        ],
+        "properties": {
+          "acquired_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "chunk_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "content_hash": {
+            "type": "string"
+          },
+          "file_size": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "id": {
+            "$ref": "#/components/schemas/RevisionId"
+          },
+          "mime_type": {
+            "type": "string"
+          },
+          "page_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "parse_status": {
+            "type": "string"
+          },
+          "parsed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "source_revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "Role": {
+        "type": "string",
+        "description": "ロール。`core.project_member.role` の CHECK と一致させる。\n\n**`Ord` は「強い順」ではない。** 表示順と並べ替えのために付けているだけで、\n権限判定には使わない。`TESTER` と `DEVELOPER` に優劣は無い（互いに\n書ける領域が違う）。可否は必ず [`Permission`](crate::Permission) の表で決める。",
+        "enum": [
+          "VIEWER",
+          "TESTER",
+          "DEVELOPER",
+          "ARCHITECT",
+          "OWNER"
+        ]
+      },
+      "SearchDocumentRef": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "doc_type"
+        ],
+        "properties": {
+          "doc_type": {
+            "$ref": "#/components/schemas/DocType"
+          },
+          "id": {
+            "$ref": "#/components/schemas/DocumentId"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "SearchFilters": {
+        "type": "object",
+        "properties": {
+          "business_domain": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "doc_types": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DocType"
+            }
+          },
+          "revision_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RevisionId"
+              }
+            ]
+          }
+        }
+      },
+      "SearchMode": {
+        "type": "string",
+        "enum": [
+          "hybrid",
+          "lexical",
+          "vector"
+        ]
+      },
+      "SearchRequest": {
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "filters": {
+            "$ref": "#/components/schemas/SearchFilters"
+          },
+          "graph_assist": {
+            "type": "boolean"
+          },
+          "include": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "$ref": "#/components/schemas/SearchMode"
+          },
+          "query": {
+            "type": "string"
+          },
+          "rerank": {
+            "type": "boolean"
+          },
+          "top_k": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "SearchResponse": {
+        "type": "object",
+        "required": [
+          "search_id",
+          "lexical_mode",
+          "degraded",
+          "results",
+          "total_candidates",
+          "latency_ms"
+        ],
+        "properties": {
+          "degraded": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "latency_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "lexical_mode": {
+            "type": "string"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchResult"
+            }
+          },
+          "search_id": {
+            "type": "string"
+          },
+          "total_candidates": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "SearchResult": {
+        "type": "object",
+        "required": [
+          "chunk_id",
+          "document",
+          "revision",
+          "locator",
+          "quote",
+          "score",
+          "sources"
+        ],
+        "properties": {
+          "chunk_id": {
+            "$ref": "#/components/schemas/ChunkId"
+          },
+          "document": {
+            "$ref": "#/components/schemas/SearchDocumentRef"
+          },
+          "evidence_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/EvidenceId"
+              }
+            ]
+          },
+          "locator": {},
+          "quote": {
+            "type": "string"
+          },
+          "rerank_score": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/SearchRevisionRef"
+          },
+          "score": {
+            "type": "number",
+            "format": "double"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "SearchRevisionRef": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/RevisionId"
+          },
+          "source_revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "UploadUrlRequest": {
+        "type": "object",
+        "required": [
+          "filename",
+          "size_bytes",
+          "mime_type"
+        ],
+        "properties": {
+          "filename": {
+            "type": "string"
+          },
+          "mime_type": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "source_revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "UploadUrlResponse": {
+        "type": "object",
+        "required": [
+          "upload_url",
+          "object_key",
+          "expires_at",
+          "max_size_bytes"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "max_size_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "object_key": {
+            "type": "string"
+          },
+          "upload_url": {
+            "type": "string"
+          }
+        }
+      },
+      "UserId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "アプリユーザー。"
+      }
+    }
+  }
+}

@@ -76,19 +76,24 @@
 
 | メソッド | パス | 説明 | 権限 |
 |---|---|---|---|
-| POST | `/projects/{pid}/documents:upload-url` | presigned URL 発行 | `document:write` |
-| POST | `/projects/{pid}/documents:bulk-import` | マニフェストによる一括取込（非同期。部分成功） | `document:write` |
+| POST | `/projects/{pid}/documents:upload-url` | 署名付き upload URL 発行（Phase 1 はローカル PUT） | `document:write` |
+| PUT | `/uploads/{token}` | 署名 token による原本 PUT（Phase 1 ローカル） | signed token |
+| POST | `/projects/{pid}/documents:bulk-import` | マニフェストによる一括取込（Phase 2） | `document:write` |
 | POST | `/projects/{pid}/documents` | 登録（アップロード後） | `document:write` |
 | GET | `/projects/{pid}/documents` | 一覧（type/domain/status） | `document:read` |
 | GET | `/documents/{did}` | 詳細 + 現行改版 | `document:read` |
-| GET | `/documents/{did}/revisions` | 改版履歴 | `document:read` |
+| GET | `/documents/{did}/content` | PDF 原本のバイト列 | `document:read` |
+| GET | `/documents/{did}/revisions` | 改版履歴（Phase 2） | `document:read` |
 | POST | `/documents/{did}/revisions/{rid}:parse` | 解析開始（非同期） | `document:write` |
-| GET | `/documents/{did}/tree?revision_id=` | 構造木 | `document:read` |
+| GET | `/documents/{did}/tree?revision_id=` | 構造木（Phase 2） | `document:read` |
 | GET | `/chunks/{cid}` | chunk 詳細 + 前後 | `document:read` |
 | DELETE | `/documents/{did}` | 論理削除 + 索引失効 | `document:delete` |
 | POST | `/projects/{pid}/knowledge/search` | 検索 | `knowledge:read` |
-| POST | `/projects/{pid}/knowledge/index-builds` | 索引再構築 | `knowledge:admin` |
+| POST | `/projects/{pid}/knowledge/index-builds` | 索引再構築（Phase 2） | `knowledge:admin` |
 | GET | `/evidence/{eid}` | 証拠原文 + 文脈 | `knowledge:read` |
+
+> Phase 1 の実装範囲は upload-url / ローカル PUT / 登録 / 一覧 / 詳細 / content / parse / delete / search / chunks / evidence / jobs / events / audit。
+> `bulk-import`、`revisions`、`tree`、`index-builds`、`jobs: cancel` は Phase 2 以降。
 
 ### 2.3 Graph / Ontology
 
@@ -170,9 +175,9 @@
 | GET | `/mcp/servers` | MCP Server 一覧 | `platform:read` |
 | POST | `/mcp/servers` | 登録 | `platform:admin` |
 | POST | `/mcp/servers/{id}:discover` | ツール再検出 | `platform:admin` |
-| GET | `/audit-logs?actor=&action=&from=` | 監査照会 | `audit:read` |
+| GET | `/projects/{pid}/audit-logs?limit=50` | 監査照会（Phase 1 は limit のみ） | `audit:read` |
 | GET | `/jobs/{jid}` | ジョブ状態 | 資源権限を継承 |
-| POST | `/jobs/{jid}:cancel` | キャンセル | 資源権限を継承 |
+| POST | `/jobs/{jid}:cancel` | キャンセル（Phase 2） | 資源権限を継承 |
 | GET | `/jobs/{jid}/events` | SSE 進捗 | 資源権限を継承 |
 
 ---

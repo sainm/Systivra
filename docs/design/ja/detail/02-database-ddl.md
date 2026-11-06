@@ -1,6 +1,6 @@
 # 詳細設計 02：データベース DDL
 
-対象：PostgreSQL 18.6、`core` / `kb` / `code` / `graph_meta` / `test` / `ai` / `ops` の 7 schema。
+対象：PostgreSQL 18.6、`core` / `corpus` / `code` / `graph_meta` / `test` / `ai` / `ops` の 7 schema。
 方針：`migrations/` の SQL を正とし、本稿は実装時の参照版。全テーブルを列挙する。
 
 ---
@@ -174,12 +174,12 @@ CREATE TABLE core.secret (
 
 ---
 
-## 2. kb
+## 2. corpus
 
 ```sql
-CREATE SCHEMA kb;
+CREATE SCHEMA corpus;
 
-CREATE TABLE kb.document (
+CREATE TABLE corpus.document (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id uuid NOT NULL,
   doc_type text NOT NULL CHECK (doc_type IN (
@@ -193,12 +193,12 @@ CREATE TABLE kb.document (
   created_at timestamptz NOT NULL DEFAULT now(),
   deleted_at timestamptz
 );
-CREATE INDEX document_project_idx ON kb.document (project_id, doc_type)
+CREATE INDEX document_project_idx ON corpus.document (project_id, doc_type)
   WHERE deleted_at IS NULL;
 
-CREATE TABLE kb.document_revision (
+CREATE TABLE corpus.document_revision (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  document_id uuid NOT NULL REFERENCES kb.document(id),
+  document_id uuid NOT NULL REFERENCES corpus.document(id),
   source_revision text,
   content_hash bytea NOT NULL,
   object_key text NOT NULL,                 -- 原本
@@ -214,12 +214,12 @@ CREATE TABLE kb.document_revision (
   parsed_at timestamptz,
   UNIQUE (document_id, content_hash)
 );
-CREATE UNIQUE INDEX doc_current_rev ON kb.document_revision (document_id)
+CREATE UNIQUE INDEX doc_current_rev ON corpus.document_revision (document_id)
   WHERE status = 'CURRENT';
 
-CREATE TABLE kb.parse_run (
+CREATE TABLE corpus.parse_run (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  revision_id uuid NOT NULL REFERENCES kb.document_revision(id) ON DELETE CASCADE,
+  revision_id uuid NOT NULL REFERENCES corpus.document_revision(id) ON DELETE CASCADE,
   parser text NOT NULL,
   parser_version text NOT NULL,
   status text NOT NULL CHECK (status IN ('PENDING','RUNNING','SUCCEEDED','FAILED','PARTIAL')),
@@ -229,10 +229,10 @@ CREATE TABLE kb.parse_run (
   error jsonb
 );
 
-CREATE TABLE kb.doc_node (
+CREATE TABLE corpus.doc_node (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  revision_id uuid NOT NULL REFERENCES kb.document_revision(id) ON DELETE CASCADE,
-  parent_id uuid REFERENCES kb.doc_node(id),
+  revision_id uuid NOT NULL REFERENCES corpus.document_revision(id) ON DELETE CASCADE,
+  parent_id uuid REFERENCES corpus.doc_node(id),
   node_type text NOT NULL CHECK (node_type IN
     ('DOCUMENT','SHEET','SECTION','TABLE','REGION','FIGURE','PARAGRAPH')),
   locator jsonb NOT NULL,
@@ -240,10 +240,10 @@ CREATE TABLE kb.doc_node (
   text text,
   meta jsonb NOT NULL DEFAULT '{}'
 );
-CREATE INDEX doc_node_parent_idx ON kb.doc_node (revision_id, parent_id, ordinal);
+CREATE INDEX doc_node_parent_idx ON corpus.doc_node (revision_id, parent_id, ordinal);
 -- セル単位のノードは作らない。
 
-CREATE TABLE kb.chunk (
+CREATE TABLE corpus.chunk (
   id uuid NOT NULL,
   project_id uuid NOT NULL,
   document_id uuid NOT NULL,
@@ -270,7 +270,7 @@ CREATE TABLE kb.chunk (
 -- HASH(project_id) は全 1,200 万行を 1 区に集中させる。スコープは
 -- (project_id, is_current) 索引 + RLS で強制し、pruning に依存しない。
 
-CREATE TABLE kb.embedding_model (
+CREATE TABLE corpus.embedding_model (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   name text NOT NULL,
   dim integer NOT NULL,
@@ -281,20 +281,20 @@ CREATE TABLE kb.embedding_model (
   UNIQUE (name, revision)
 );
 
-CREATE TABLE kb.embedding_1024 (
+CREATE TABLE corpus.embedding_1024 (
   chunk_id uuid NOT NULL,
   project_id uuid NOT NULL,          -- chunk.project_id と一致をアプリで保証（RLS / スコープ用）
-  model_id uuid NOT NULL REFERENCES kb.embedding_model(id),
+  model_id uuid NOT NULL REFERENCES corpus.embedding_model(id),
   vec vector(1024) NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (chunk_id, model_id)
 ) PARTITION BY HASH (chunk_id);
--- kb.chunk と分区数を揃えると、同一 UUID は同じ番号の分区に入る。
+-- corpus.chunk と分区数を揃えると、同一 UUID は同じ番号の分区に入る。
 -- パーティションごとに HNSW。model_id は partial index の条件。
 -- 分区キーは chunk_id なので project pruning は効かない。全分区へ並列 fan-out し、
 -- 各分区で project_id = $1 を RLS + 索引で絞る（detail/03-performance.md §2）。
 
-CREATE TABLE kb.index_build (
+CREATE TABLE corpus.index_build (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id uuid NOT NULL,
   model_id uuid NOT NULL,
@@ -305,7 +305,7 @@ CREATE TABLE kb.index_build (
   error jsonb
 );
 
-CREATE TABLE kb.evidence (
+CREATE TABLE corpus.evidence (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id uuid NOT NULL,
   source_type text NOT NULL,
@@ -319,9 +319,9 @@ CREATE TABLE kb.evidence (
   confidence real NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX evidence_doc_idx ON kb.evidence (document_id, revision_id);
+CREATE INDEX evidence_doc_idx ON corpus.evidence (document_id, revision_id);
 
-CREATE TABLE kb.retrieval_log (
+CREATE TABLE corpus.retrieval_log (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id uuid NOT NULL,
   query text NOT NULL,
@@ -842,8 +842,8 @@ CREATE TABLE ops.provider_health (
 
 | テーブル | 方式 | 作成 | 入れ替え |
 |---|---|---|---|
-| `kb.chunk` | HASH(id) 32〜64 | マイグレーションで一括作成 | 不要（ハッシュ固定） |
-| `kb.embedding_1024` | HASH(chunk_id) 32〜64（**`kb.chunk` と同数**） | 同上。各パーティションに HNSW | モデル切替は `model_id` 条件で別索引 |
+| `corpus.chunk` | HASH(id) 32〜64 | マイグレーションで一括作成 | 不要（ハッシュ固定） |
+| `corpus.embedding_1024` | HASH(chunk_id) 32〜64（**`corpus.chunk` と同数**） | 同上。各パーティションに HNSW | モデル切替は `model_id` 条件で別索引 |
 | `code.fact` | パーティションしない | 250 万行は単一表で十分。`(project_id, revision_id)` 索引。古い revision はエクスポート後に削除 |
 | `core.audit_log` | RANGE(occurred_at) 月次 | 12 か月先まで事前作成 | 3 年でアーカイブ |
 | `test.test_execution` | **パーティションしない**（本文 DDL どおり） | — | 10 万行規模。180 日で DELETE + アーカイブ |
@@ -855,17 +855,24 @@ CREATE TABLE ops.provider_health (
 ## 7. マイグレーション順
 
 ```text
-001_core            workspace, app_user, project, member, api_token
-002_core_ops        job, checkpoint, outbox, outbox_dead_letter, audit, secret
-003_kb_document     document, revision, parse_run
-004_kb_chunk        doc_node, chunk（パーティション）, embedding_model, embedding
-005_kb_evidence     evidence, retrieval_log, index_build
-006_code            repository, revision, source_file, symbol, analysis_run, fact
-007_graph           ontology, entity, relationship, projection_state, projection_build
-008_test            validation_rule, plan, scenario, case, step, data, run, execution, coverage
-009_ai              agent, prompt, run, step, approval, workflow, mcp
-010_ops             provider, health, capability_binding
+001_core             workspace, app_user, project, member, api_token
+002_core_ops         job, checkpoint, outbox, outbox_dead_letter, audit, secret
+003_authz            project / project_member の自己所属参照ポリシー
+004_corpus_document  document, document_revision, parse_run
+005_corpus_chunk     doc_node, chunk（パーティション）, embedding_model, embedding_1024
+006_corpus_evidence  evidence, retrieval_log, index_build
+007_job_events       job_event, job.status 制約
+008_project_of       core.project_of()
+009_rename_corpus    旧 kb → corpus の互換リネーム（新規 DB では no-op）
+010_code             repository, revision, source_file, symbol, analysis_run, fact
+011_graph            ontology, entity, relationship, projection_state, projection_build
+012_test             validation_rule, plan, scenario, case, step, data, run, execution, coverage
+013_ai               agent, prompt, run, step, approval, workflow, mcp
+014_ops              provider, health, capability_binding
 ```
+
+`009_rename_corpus` が通し番号 009 を使用するため、Phase 2 の code schema は `010_code` から開始する。
+旧 `kb` DB を持つ環境は `docs/phase1/handoff.md` の手順で再作成する（`009` は新規 DB では no-op）。
 
 各マイグレーションは forward-only。ロールバックが必要な場合は、新しいマイグレーションで打ち消す。
 

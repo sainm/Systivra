@@ -78,14 +78,23 @@ P1-ENV-01 Cargo workspace / compose / CI
       └────────────────────────────> P1-QA-01 統合テスト / 受入 / 降格判断
 ```
 
-**進捗（2026-11-05）**
+**進捗（2026-11-06）**
 
 | ID | 状態 | 実測 |
 |---|---|---|
-| `P1-ENV-01` | **完了** | 13 crate が `cargo check` / `clippy -D warnings` / `fmt --check` 緑。`cargo test --workspace` 23 passed。`/healthz` 200、`/readyz` は DB 生存で 200・停止で 503。`compose` は未検証（開発機に Docker が無い） |
-| `P1-DB-01` | **完了** | `001`〜`003` / `roles.sql` を実 DB に適用。`scripts/verify-db.sh` の 10 項目が緑 |
-| `P1-API-01` | **完了** | ログイン / ログアウト / `/me` / `/projects/{pid}/me`。誤パスワードと不存在 ID の応答が同一。非所属プロジェクトは 404、偽造 Cookie は 401。権限は `06-API.md` §4.1 のマトリクスを 1 箇所に実装 |
-| その他 | 未着手 | — |
+| `P1-ENV-01` | **完了** | 13 crate、`fmt` / `clippy -D warnings` / `cargo test --workspace` 緑。web は Vite + React + Tailwind、`npm run build` と i18n キー検査が緑 |
+| `P1-DB-01` | **完了** | `001`〜`009` / `roles.sql` を空 DB に適用。`corpus` は chunk / embedding 各 32 分区、HNSW 32、RLS 9 表 9 ポリシー。`scripts/verify-db.sh` 全項目緑 |
+| `P1-API-01` | **完了** | 認証・認可・エラー封筒。非所属は 404、偽造 Cookie は 401 |
+| `P1-API-02` | **完了（Phase 1 範囲）** | upload-url / 登録 / 一覧（カーソル）/ 論理削除 / 原本取得。`CONFLICT_ALREADY_IMPORTED`、監査、PDF 署名検査。bulk-import は Phase 2（`08-実装計画.md` の大規模取込） |
+| `P1-JOB-01` | **完了** | 冪等 enqueue、`SKIP LOCKED` 取得、heartbeat、3 指標進捗、checkpoint、`job_event`。SSE は `Last-Event-ID` 再送と `done` 終端 |
+| `P1-PARSE-01` | **完了（降格）** | docling ではなくプロセス内 PDF 抽出。100 ページを 1.7〜2.7 秒で DocNode + chunk 化。41/100 で kill → 再開し重複 0 |
+| `P1-RAG-01` | **完了（降格）** | 800 token / 80 overlap（ページ単位）、bigram/katakana の FTS、1024 次元ローカル埋め込み、32 分区 fan-out。検索 40〜78ms |
+| `P1-EVID-01` | **完了（降格）** | 証拠は `quote` 部分文字列を検証して保存。`bbox` は null で、UI が PDF.js テキスト層から矩形を算出（70 矩形を実測） |
+| `P1-API-03` | **完了** | search / chunks / evidence / jobs / events。`latency_ms`、`degraded`、資源単位の認可 |
+| `P1-FE-01` | **完了** | ログイン / プロジェクト / 設計書一覧・取込 / 文書詳細 / 検索 + エビデンスドロワー。1440px と 607px を実ブラウザで確認 |
+| `P1-DOC-01` | **完了** | `contracts/api/openapi.json` を utoipa から生成し CI で一致検査。フロント型は `openapi-typescript` 生成 |
+| `P1-QA-01` | **完了（A-01 等価検証）** | A-01〜A-10 を `docs/phase1/walking-skeleton.md` に記録。A-01 の `docker compose up` は Docker / compose provider 不在で未実行だが、同一 Dockerfile・初期化 SQL・環境変数で Podman に 4 サービスを起動し、コンテナ経由の E2E まで通過 |
+| `P1-DOC-04` | **完了** | `docs/phase1/handoff.md`。置き換える境目と触らない場所を列挙 |
 
 > **依存の境界は Cargo.toml で機械的に効く。** `api` の `Cargo.toml` に `store` を入れていないので、HTTP 層から SQL を書こうとするとコンパイルで落ちる。「規約で守る」より確実。
 
@@ -117,7 +126,7 @@ P1-ENV-01 Cargo workspace / compose / CI
 
 | ID | タスク | 担当 | 依存 | 成果物 | 完了条件 | 人日 |
 |---|---|---|---|---|---|---|
-| P1-API-02 | upload-url / 登録 / 一覧 / 論理削除 | BE-1 | API-01 | `api/src/routes/document.rs` | `detail/04` §1.1〜§1.4 の契約テストが通る | 2 |
+| P1-API-02 | upload-url / 登録 / 一覧 / 論理削除（bulk-import は Phase 2） | BE-1 | API-01 | `api/src/routes/document.rs` | `detail/04` §1.1・§1.2・§1.4 の契約テストが通る。§1.3 は Phase 2 | 2 |
 | P1-JOB-01 | job / checkpoint / 再試行 / SSE | BE-1 | DB-01, API-02 | `store/src/job.rs` | §5.4。worker kill → 再起動で再開 | 3 |
 | P1-DOC-02 | 監査ログ（全書き込み） | BE-1 | DB-01 | `store/src/audit.rs` | 「誰がいつどのファイルを上げたか」を照会できる。UPDATE / DELETE を REVOKE | 1 |
 | P1-PARSE-01 | PDF 解析 → DocNode 木 | BE-2 | PARSE-01a | `worker/src/pdf.rs` | §5.5。100 ページ 5 分以内 | 2 |
@@ -154,12 +163,12 @@ P1-ENV-01 Cargo workspace / compose / CI
 
 | 項目 | Phase 1 での要求 | 理由 |
 |---|---|---|
-| `kb.chunk` / `kb.embedding_1024` の **32〜64 分区** | `HASH(id)` / `HASH(chunk_id)` で**全分区を作成** | 後から非分区表を分区化するのは 1,200 万行で実質不可能。`project_id` はキーにしない（A-02 が単一プロジェクト） |
-| `kb.embedding_1024.project_id` | 冗長列として保持し、`kb.chunk.project_id` と一致させる | 検索のスコープは RLS + 索引で強制。pruning に依存しない |
+| `corpus.chunk` / `corpus.embedding_1024` の **32〜64 分区** | `HASH(id)` / `HASH(chunk_id)` で**全分区を作成** | 後から非分区表を分区化するのは 1,200 万行で実質不可能。`project_id` はキーにしない（A-02 が単一プロジェクト） |
+| `corpus.embedding_1024.project_id` | 冗長列として保持し、`corpus.chunk.project_id` と一致させる | 検索のスコープは RLS + 索引で強制。pruning に依存しない |
 | `core.outbox_event` | `event_id` PK、`seq` IDENTITY、`outbox_dead_letter` まで作成 | Phase 3 の投影で列を足さない |
 | `graph_meta.entity.projection_seq` | 列だけ作る（値は 0） | Phase 3 で ALTER しない |
 | `core.audit_log` | `PRIMARY KEY (id, occurred_at)` + 月次 RANGE 分区、12 か月先まで | 追記専用。UPDATE / DELETE を REVOKE |
-| `kb.document.doc_type` | §0.3 の列挙で `CHECK` | `DETAILED_SPEC` を誤登録させない。Phase 1 の PDF は `MANUAL` または `OTHER` |
+| `corpus.document.doc_type` | §0.3 の列挙で `CHECK` | `DETAILED_SPEC` を誤登録させない。Phase 1 の PDF は `MANUAL` または `OTHER` |
 
 **RLS**：`project_id` を持つ全表に `USING (project_id = current_setting('app.project_id')::uuid)` を適用。アプリはトランザクション開始時に `SET LOCAL app.project_id = …` を**サーバー側コンテキストから**設定する。リクエスト本文の値は使わない。
 
@@ -178,7 +187,7 @@ P1-ENV-01 Cargo workspace / compose / CI
 
 ### 5.3 `P1-API-02` 文書 API
 
-`detail/04-api-contract.md` §1.1〜§1.4 をそのまま実装する。Phase 1 固有の差分は **locator の `kind` だけ**：
+`detail/04-api-contract.md` §1.1・§1.2・§1.4 を実装する。§1.3 の `documents:bulk-import` は Phase 2（`08-実装計画.md` の大規模取込）へ延期し、Phase 1 は単一 PDF の取込に限定する。Phase 1 固有の差分は **locator の `kind` だけ**：
 
 ```json
 {"kind":"pdf","page":12,"bbox":[72.0,118.5,523.0,206.25],"char_range":[1024,1180]}
@@ -188,7 +197,8 @@ P1-ENV-01 Cargo workspace / compose / CI
 
 - `upload-url` は DB に document を書かない。登録 API で初めて 1 行作る。
 - `content_hash` 重複は `CONFLICT_ALREADY_IMPORTED`。
-- 一覧は**カーソルのみ**、`?limit=50&cursor=<opaque>`、`include` で列を絞る。OFFSET 禁止。
+- 一覧は**カーソルのみ**、`?limit=50&cursor=<opaque>`。OFFSET 禁止。
+- `include` による列の絞り込みは Phase 2（現行はサマリ固定）。
 - 論理削除は即時 `deleted_at`、索引からの除外も即時。物理削除は非同期（Phase 3 の削除伝播と同じ規約）。
 
 ### 5.4 `P1-JOB-01` ジョブと SSE
@@ -203,7 +213,7 @@ P1-ENV-01 Cargo workspace / compose / CI
 ### 5.5 `P1-PARSE-01` PDF 解析
 
 - **自作 `doc-worker` を書かない**。`quay.io/docling-project/docling-serve-cpu:v1.38.1` をそのまま使う。
-- 返ってくる節・段落を `kb.doc_node`（Document / Section / Paragraph）へ。セル単位ノードは作らない。
+- 返ってくる節・段落を `corpus.doc_node`（Document / Section / Paragraph）へ。セル単位ノードは作らない。
 - 証拠位置は `page + bbox + char_range`。PDF が縦書き / ルビを含む場合は `writing_mode: vertical` を `metadata` に残し、ルビは独立テキスト層として保持する（`00-全体設計.md` J-04）。
 - 日本語ファイル名・見出しは **原文 NFC で保存**、検索用にだけ NFKC + 旧字体マップを掛ける（J-03）。`quote_hash = sha256(NFC(quote))`。
 - タイムアウト 5 分。超過は `VALIDATION_SCHEMA` でラップし、`detail.code` に内部コードを残す。
@@ -214,7 +224,7 @@ P1-ENV-01 Cargo workspace / compose / CI
 |---|---|---|
 | chunk | 固定長 **800 token**、overlap 80 | 構造認識、親子 chunk、Excel 12 行ブロック |
 | 日本語処理 | Lindera(IPADIC) + `to_tsvector('simple', tokenized)` | L2 pg_bigm + クエリルーティング + RRF |
-| embedding | 単一モデル、`kb.embedding_1024` | モデル切替 / `index_build` / halfvec |
+| embedding | 単一モデル、`corpus.embedding_1024` | モデル切替 / `index_build` / halfvec |
 | 検索 | ベクトルのみ | ハイブリッド + rerank + graph assist |
 | 分区 | 32〜64 へ fan-out（実質ヒットは少数） | 本番 64 区並列（`detail/03` §2） |
 
@@ -222,11 +232,11 @@ P1-ENV-01 Cargo workspace / compose / CI
 
 - `project_id = $1 AND is_current = true` を**必ず**クエリに含める。RLS は第二の防衛線であり、アプリ側の条件を省略しない。
 - `hnsw.ef_search = 80` を起点。`SET LOCAL hnsw.iterative_scan = relaxed_order`。
-- `latency_ms` はサーバー側処理時間（キュー待ちを除く）。全検索を `kb.retrieval_log` に記録し、P95 を出せるようにする。
+- `latency_ms` はサーバー側処理時間（キュー待ちを除く）。全検索を `corpus.retrieval_log` に記録し、P95 を出せるようにする。
 
 ### 5.7 `P1-EVID-01` 証拠
 
-- `kb.evidence` に `locator / quote / quote_hash / resolution / confidence` を保存。`evidence` は 1 Fact につき 1 件以上（Phase 4 の `code.fact_evidence` と同じ規約）。
+- `corpus.evidence` に `locator / quote / quote_hash / resolution / confidence` を保存。`evidence` は 1 Fact につき 1 件以上（Phase 4 の `code.fact_evidence` と同じ規約）。
 - `quote` は**原文の完全な部分文字列**。サーバーが検証し、不一致なら 500 ではなく `EVIDENCE_QUOTE_MISMATCH`（422）。
 - JSON の `quote_hash` は `sha256:` + lowercase hex 64 文字。DB は `bytea`。
 - UI は `locator` だけを見てページを開く。**AI に locator を生成させない**（Phase 1 に AI は無いが、規約を先に固定する）。
