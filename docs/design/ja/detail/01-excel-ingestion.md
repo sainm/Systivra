@@ -100,6 +100,8 @@ pub struct Drawing {
 
 `calamine` で値と結合を取得し、`quick-xml` で drawings / tables / definedNames を補完する。calamine が返さない要素を推測で埋めない。
 
+> **Phase 2 実装状況**：`crates/worker/src/xlsx/` は calamine を使わず、ZIP + XML を直読みする。共有文字列、数値、真偽、日付（styles の numFmt）、数式キャッシュ、コメント、定義名、非表示シート、結合セル、図形アンカーを読み、領域検出・ヘッダ判定・12 行（800 token 上限）チャンクまで実装済み。図形の media は SHA-256 を保持する。
+
 ### 3.2 値の扱い
 
 | 型 | 扱い |

@@ -89,13 +89,63 @@ CREATE TABLE core.api_token (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- 018_sso。認証前に引くため RLS の対象外（app_user と同じ）。
+-- subject は IdP の不変 ID。未知の subject を自動プロビジョニングしない。
+CREATE TABLE core.external_identity (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES core.app_user(id) ON DELETE CASCADE,
+  provider text NOT NULL,
+  subject text NOT NULL,
+  email text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  last_login_at timestamptz,
+  UNIQUE (provider, subject),
+  UNIQUE (user_id, provider)
+);
+
+-- 019_session。認証中に引くため RLS の対象外。
+-- Cookie は session id を含み、失効・期限はこの表で判定する。
+CREATE TABLE core.session (
+  id uuid PRIMARY KEY,
+  user_id uuid NOT NULL REFERENCES core.app_user(id) ON DELETE CASCADE,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  last_seen_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz NOT NULL,
+  revoked_at timestamptz,
+  ip_hash bytea,
+  user_agent text,
+  provider text,                 -- 021: IdP の issuer
+  subject text,                  -- 021: IdP の sub
+  idp_sid text                   -- 021: IdP の sid
+);
+CREATE INDEX session_user_idx ON core.session (user_id, created_at DESC);
+CREATE INDEX session_live_idx ON core.session (expires_at) WHERE revoked_at IS NULL;
+
+-- 022_scim。SCIM Groups と IdP グループ→ロールの対応。
+CREATE TABLE core.external_group (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  provider text NOT NULL,
+  external_id text NOT NULL,
+  display_name text NOT NULL,
+  role text NOT NULL CHECK (role IN ('OWNER','ARCHITECT','DEVELOPER','TESTER','VIEWER')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (provider, external_id)
+);
+
+CREATE TABLE core.external_group_member (
+  group_id uuid NOT NULL REFERENCES core.external_group(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL REFERENCES core.app_user(id) ON DELETE CASCADE,
+  PRIMARY KEY (group_id, user_id)
+);
+
 CREATE TABLE core.job (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id uuid NOT NULL,
   kind text NOT NULL,
   priority smallint NOT NULL DEFAULT 5,
   status text NOT NULL CHECK (status IN
-    ('PENDING','QUEUED','RUNNING','WAITING_APPROVAL','SUCCEEDED','FAILED','CANCELLED','TIMEOUT')),
+    ('PENDING','QUEUED','RUNNING','WAITING_APPROVAL','SUCCEEDED','SUCCEEDED_WITH_ERRORS','FAILED','CANCELLED','TIMEOUT')),
   idempotency_key text NOT NULL,
   input jsonb NOT NULL,
   progress jsonb NOT NULL DEFAULT '{"done":0,"total":0,"phase":null}',
@@ -119,6 +169,16 @@ CREATE TABLE core.job_checkpoint (
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (job_id, seq)
 );
+
+CREATE TABLE core.job_event (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  job_id uuid NOT NULL REFERENCES core.job(id) ON DELETE CASCADE,
+  event text NOT NULL,
+  data jsonb NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX job_event_job_idx ON core.job_event (job_id, id);
+-- RLS は job 経由。SSE の id はこの id を使う。
 
 CREATE TABLE core.outbox_event (
   event_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),  -- 冪等キー。投影側の last_event_id と対応
@@ -161,7 +221,7 @@ CREATE TABLE core.audit_log (
   occurred_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (id, occurred_at)          -- パーティションキーを含める
 ) PARTITION BY RANGE (occurred_at);
--- 月次パーティションはマイグレーションで生成。UPDATE/DELETE は REVOKE。
+-- 月次パーティションは 24 か月先まで生成。UPDATE/DELETE は REVOKE。
 
 CREATE TABLE core.secret (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -241,7 +301,8 @@ CREATE TABLE corpus.doc_node (
   meta jsonb NOT NULL DEFAULT '{}'
 );
 CREATE INDEX doc_node_parent_idx ON corpus.doc_node (revision_id, parent_id, ordinal);
--- セル単位のノードは作らない。
+-- セル単位のノードは作らない。Phase 1 は非分区（revision_id 索引）。
+-- Phase 2 で 05-データモデル §1.4 の revision_id 分割を検討する。
 
 CREATE TABLE corpus.chunk (
   id uuid NOT NULL,
@@ -280,6 +341,7 @@ CREATE TABLE corpus.embedding_model (
   enabled boolean NOT NULL DEFAULT true,
   UNIQUE (name, revision)
 );
+-- 001/005 で local-hash-1024（revision 1）、010 で local-hash-1024-v2（revision 2）を投入する。
 
 CREATE TABLE corpus.embedding_1024 (
   chunk_id uuid NOT NULL,
@@ -302,8 +364,13 @@ CREATE TABLE corpus.index_build (
   chunk_count bigint NOT NULL DEFAULT 0,
   started_at timestamptz,
   finished_at timestamptz,
-  error jsonb
+  error jsonb,
+  is_active boolean NOT NULL DEFAULT false
 );
+
+CREATE UNIQUE INDEX index_build_active_idx
+  ON corpus.index_build (project_id)
+  WHERE is_active;
 
 CREATE TABLE corpus.evidence (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -335,6 +402,30 @@ CREATE TABLE corpus.retrieval_log (
   user_feedback smallint,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+```
+
+`core.project_of(kind, id)` は、パスに `{pid}` を持たない資源 API の認可で
+「その資源が属するプロジェクト」を返す Phase 1 追加関数である。
+`SECURITY DEFINER` で RLS を迂回するが、返すのは project_id だけに限定する。
+
+```sql
+CREATE FUNCTION core.project_of(kind text, p_id uuid) RETURNS uuid
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog
+AS $$
+  SELECT CASE kind
+    WHEN 'document' THEN (SELECT project_id FROM corpus.document WHERE id = p_id)
+    WHEN 'revision' THEN (
+      SELECT d.project_id
+        FROM corpus.document_revision r
+        JOIN corpus.document d ON d.id = r.document_id
+       WHERE r.id = p_id
+    )
+    WHEN 'chunk' THEN (SELECT project_id FROM corpus.chunk WHERE id = p_id LIMIT 1)
+    WHEN 'evidence' THEN (SELECT project_id FROM corpus.evidence WHERE id = p_id)
+    WHEN 'job' THEN (SELECT project_id FROM core.job WHERE id = p_id)
+  END
+$$;
 ```
 
 ---
@@ -398,6 +489,7 @@ CREATE TABLE code.analysis_run (
   revision_id uuid NOT NULL,
   status text NOT NULL CHECK (status IN ('PENDING','RUNNING','SUCCEEDED','FAILED','PARTIAL')),
   engine_versions jsonb NOT NULL DEFAULT '{}',
+  -- 互換用。最終設計では classpath 型解決を行わないため常に false。
   classpath_complete boolean NOT NULL DEFAULT false,
   stats jsonb NOT NULL DEFAULT '{}',
   started_at timestamptz,
@@ -405,6 +497,7 @@ CREATE TABLE code.analysis_run (
   error jsonb
 );
 
+-- 互換用 schema。最終設計では登録・参照しない（ADR-017）。
 CREATE TABLE code.classpath_index (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id uuid NOT NULL,
@@ -444,7 +537,7 @@ CREATE UNIQUE INDEX fact_unique_live ON code.fact
   (project_id, revision_id, subject_key, relation, object_key, analysis_engine)
   WHERE valid_to IS NULL;
 
--- 運用規約（ADR / review-2026-11-05 C-2 の解決）：
+-- 運用規約（ADR-004）：
 -- 増分再解析では「旧行を supersede してから新行を INSERT」を **1 トランザクション**で行う。
 --   1) UPDATE code.fact SET valid_to = now(), superseded_by = $new_id
 --        WHERE <同一キー> AND valid_to IS NULL;
@@ -531,10 +624,12 @@ CREATE TABLE graph_meta.relationship (
   fact_id uuid,
   revision text NOT NULL,
   valid_to timestamptz,
+  projection_seq bigint NOT NULL DEFAULT 0,   -- 順序逆転防止（Neo4j 側の r.projection_seq と同値）
   UNIQUE (project_id, src_id, dst_id, rel_type, revision)
 );
 CREATE INDEX rel_src_idx ON graph_meta.relationship (src_id, rel_type) WHERE valid_to IS NULL;
 CREATE INDEX rel_dst_idx ON graph_meta.relationship (dst_id, rel_type) WHERE valid_to IS NULL;
+CREATE INDEX rel_scope_idx ON graph_meta.relationship (project_id) WHERE valid_to IS NULL;
 
 CREATE TABLE graph_meta.projection_state (
   project_id uuid PRIMARY KEY,
@@ -562,6 +657,20 @@ CREATE TABLE graph_meta.projection_build (
 ---
 
 ## 5. test / ai / ops（主要列のみ）
+
+> **2026-11-07 の実装差分**（正本は下の DDL、実ファイルは `migrations/015_test.sql`）。
+> 差分の理由と受入結果は `docs/phase6/acceptance.md` に記録する。
+>
+> - 子表（scenario / step / data_set / data_row / execution）にも `project_id` を付与し、
+>   全 11 表で RLS を有効化した。スコープ設定漏れを「0 件」にするため。
+> - `test_case` に `dsl` / `covers_screens` / `destructive` を追加。
+> - `test_run` に `environment_id` / `lock_acquired` / `job_id` と、活性 run を 1 つに
+>   限る部分一意索引を追加。`status` に `READY`（Runner 待ち）を追加。
+> - `test_execution` に `execution_source` / `expected` / `actual` / `fingerprint` と
+>   `failure_kind` の 8 値 CHECK、`status` の `PENDING` を追加。
+> - `defect` に `fingerprint` と部分一意索引（再発を 1 件に集約）を追加。
+> - `coverage_snapshot` を `(project_id, test_run_id)` で一意にし、再計算を冪等にした。
+> - `ai` / `ops` schema は未作成。
 
 ```sql
 CREATE SCHEMA test;
@@ -845,7 +954,7 @@ CREATE TABLE ops.provider_health (
 | `corpus.chunk` | HASH(id) 32〜64 | マイグレーションで一括作成 | 不要（ハッシュ固定） |
 | `corpus.embedding_1024` | HASH(chunk_id) 32〜64（**`corpus.chunk` と同数**） | 同上。各パーティションに HNSW | モデル切替は `model_id` 条件で別索引 |
 | `code.fact` | パーティションしない | 250 万行は単一表で十分。`(project_id, revision_id)` 索引。古い revision はエクスポート後に削除 |
-| `core.audit_log` | RANGE(occurred_at) 月次 | 12 か月先まで事前作成 | 3 年でアーカイブ |
+| `core.audit_log` | RANGE(occurred_at) 月次 | 24 か月先まで事前作成 | 3 年でアーカイブ |
 | `test.test_execution` | **パーティションしない**（本文 DDL どおり） | — | 10 万行規模。180 日で DELETE + アーカイブ |
 
 > **`project_id` をパーティションキーにしない**。A-02 は単一プロジェクト 60,000 冊であり、`HASH(project_id)` では全行が 1 区に集中して 32〜64 分割が機能しない。`HASH(id)` / `HASH(chunk_id)` で均等分散し、`project_id` は列 + 索引 + RLS で強制する。検索は全分区へ並列 fan-out（`detail/03-performance.md` §2）。`05-データモデル.md` §1.4 と本文 DDL はこの方針で統一済み。
@@ -864,15 +973,36 @@ CREATE TABLE ops.provider_health (
 007_job_events       job_event, job.status 制約
 008_project_of       core.project_of()
 009_rename_corpus    旧 kb → corpus の互換リネーム（新規 DB では no-op）
-010_code             repository, revision, source_file, symbol, analysis_run, fact
+010_index_build_active  index_build.is_active + 一意索引 + local-hash-1024-v2
 011_graph            ontology, entity, relationship, projection_state, projection_build
-012_test             validation_rule, plan, scenario, case, step, data, run, execution, coverage
-013_ai               agent, prompt, run, step, approval, workflow, mcp
-014_ops              provider, health, capability_binding
+012_graph_relationship_seq  relationship.projection_seq（順序逆転防止）
+013_code             repository, revision, source_file, symbol, analysis_run, fact
+014_impact           impact.assessment_draft（変更影響 Draft）
+015_test             validation_rule, plan, scenario, case, step, data, run, execution, defect, coverage
+016_ai               agent, agent_version, prompt, agent_run, agent_step, approval, workflow, mcp
+017_inquiry          impact.change_inquiry（Q-01 の質問・候補・5 セクション）
+018_sso              core.external_identity（OIDC の issuer + subject と app_user の紐付け）
+019_session          core.session（失効可能なサーバー側セッション）
+020_ops              （未作成。将来の provider / capability_binding 用に予約）
+021_session_identity session.provider / subject / idp_sid（IdP 主導ログアウト）
+022_scim             external_group / external_group_member（SCIM・グループ→ロール）
+023_first_project    core.first_project()（SCIM 同期用の単一プロジェクト解決）
+024_code_schema_repair  旧 013 適用 DB の code 列・索引を現行 schema へ冪等修復
 ```
 
-`009_rename_corpus` が通し番号 009 を使用するため、Phase 2 の code schema は `010_code` から開始する。
+`009_rename_corpus` が通し番号 009、`010_index_build_active` が 010、`011_graph` / `012_graph_relationship_seq`
+が 011 / 012 を使用するため、Phase 4 の code schema は `013_code` から開始する。
+2026-11-07 時点で 014 は影響分析、015 はテスト工学、016 は AI / MCP / Workflow、
+017 は Q-01 変更影響問合せ、018 は OIDC SSO、019 はサーバー側セッション、
+021 は IdP 紐付け、022 は SCIM、023 は `core.first_project()`、024 は旧 code schema の
+前進修復に割り当て済み。020 は将来の ops 用に予約。**次のマイグレーションは 025 以降**。
+旧表の `014_test` / `015_ai` / `016_ops` は実装と
+食い違っていたため、実ファイルの並びに合わせて修正した。
 旧 `kb` DB を持つ環境は `docs/phase1/handoff.md` の手順で再作成する（`009` は新規 DB では no-op）。
+
+`015_test.sql` は `core.project_of` を `CREATE OR REPLACE` で全体書換えする。
+014 の 10 分支を保持したうえで test の 5 分支を追加しており、
+`scripts/verify-db.sh` に旧分支の回帰検査がある。
 
 各マイグレーションは forward-only。ロールバックが必要な場合は、新しいマイグレーションで打ち消す。
 

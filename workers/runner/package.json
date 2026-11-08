@@ -1,0 +1,13 @@
+{
+  "name": "systivra-test-runner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "PlaywrightRunner: executes the Phase 6 JSON step DSL and reports executions back to Systivra.",
+  "scripts": {
+    "run": "node runner.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "^1.65.0"
+  }
+}

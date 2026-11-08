@@ -5,32 +5,27 @@
 //! どちらも `xl/worksheets/*.xml` と `xl/drawings/*.xml` を直に読むのが最短。
 
 use std::collections::HashMap;
-use std::io::{Cursor, Read};
 
-use quick_xml::events::Event;
-use quick_xml::Reader;
 use sha2::{Digest, Sha256};
+
+use crate::office::{parent_of, Node, Package};
 
 use super::a1::{self, CellRef};
 
-#[derive(Debug, thiserror::Error)]
-pub enum XlsxError {
-    #[error("ZIP として壊れている: {0}")]
-    Zip(String),
-
-    #[error("XML の解析に失敗: {0}")]
-    Xml(String),
-
-    #[error("必要なパーツが無い: {0}")]
-    Missing(String),
-
-    #[error("関係（rels）が解決できない: {0}")]
-    Rel(String),
-}
+pub use crate::office::OfficeError as XlsxError;
+pub(super) use crate::office::{normalize_part, resolve_target};
 
 /// 開いたブック。ZIP の中身をそのまま持つ。
 pub struct Workbook {
-    parts: HashMap<String, Vec<u8>>,
+    package: Package,
+}
+
+/// シートの表示状態。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Visibility {
+    Visible,
+    Hidden,
+    VeryHidden,
 }
 
 /// シート 1 枚。
@@ -39,6 +34,7 @@ pub struct Sheet {
     pub name: String,
     /// ZIP 内のパス（例 `xl/worksheets/sheet1.xml`）
     pub part: String,
+    pub visibility: Visibility,
 }
 
 /// 結合セル。子セルを展開するかどうかは呼び出し側が決める（§5）。
@@ -101,35 +97,18 @@ pub struct MediaRef {
 
 /// ZIP を開いてパーツを読み込む。
 pub fn open(bytes: &[u8]) -> Result<Workbook, XlsxError> {
-    let mut zip =
-        zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| XlsxError::Zip(e.to_string()))?;
-    let mut parts = HashMap::new();
-
-    for i in 0..zip.len() {
-        let mut file = zip.by_index(i).map_err(|e| XlsxError::Zip(e.to_string()))?;
-        if !file.is_file() {
-            continue;
-        }
-        let mut buf = Vec::new();
-        file.read_to_end(&mut buf)
-            .map_err(|e| XlsxError::Zip(e.to_string()))?;
-        parts.insert(file.name().to_string(), buf);
-    }
-
-    Ok(Workbook { parts })
+    Ok(Workbook {
+        package: crate::office::open(bytes)?,
+    })
 }
 
 impl Workbook {
     pub fn has(&self, part: &str) -> bool {
-        self.parts.contains_key(part)
+        self.package.has(part)
     }
 
-    fn xml(&self, part: &str) -> Result<Node, XlsxError> {
-        let bytes = self
-            .parts
-            .get(part)
-            .ok_or_else(|| XlsxError::Missing(part.to_string()))?;
-        parse_tree(bytes)
+    pub(super) fn xml(&self, part: &str) -> Result<Node, XlsxError> {
+        self.package.xml(part)
     }
 
     /// シート一覧。順序は `workbook.xml` の定義順。
@@ -144,9 +123,15 @@ impl Workbook {
             let Some(target) = rels.get(rid) else {
                 return Err(XlsxError::Rel(format!("sheet の rel {rid} が無い")));
             };
+            let visibility = match s.attr("state") {
+                Some("hidden") => Visibility::Hidden,
+                Some("veryHidden") => Visibility::VeryHidden,
+                _ => Visibility::Visible,
+            };
             out.push(Sheet {
                 name: name.to_string(),
                 part: normalize_part("xl", target),
+                visibility,
             });
         }
         Ok(out)
@@ -276,7 +261,7 @@ impl Workbook {
     }
 
     fn media_ref(&self, part: &str) -> Option<MediaRef> {
-        let bytes = self.parts.get(part)?;
+        let bytes = self.package.part(part)?;
         let mut h = Sha256::new();
         h.update(bytes);
         Some(MediaRef {
@@ -287,174 +272,9 @@ impl Workbook {
     }
 
     /// `foo.xml` の関係ファイル `_rels/foo.xml.rels` を読む。
-    fn rels_for(&self, part: &str) -> Result<HashMap<String, String>, XlsxError> {
-        let (dir, file) = match part.rsplit_once('/') {
-            Some((d, f)) => (d, f),
-            None => ("", part),
-        };
-        let rels_path = if dir.is_empty() {
-            format!("_rels/{file}.rels")
-        } else {
-            format!("{dir}/_rels/{file}.rels")
-        };
-
-        if !self.has(&rels_path) {
-            return Ok(HashMap::new());
-        }
-
-        let root = self.xml(&rels_path)?;
-        let mut map = HashMap::new();
-        for r in root.descendants("Relationship") {
-            let (Some(id), Some(target)) = (r.attr("Id"), r.attr("Target")) else {
-                continue;
-            };
-            map.insert(id.to_string(), target.to_string());
-        }
-        Ok(map)
+    pub(super) fn rels_for(&self, part: &str) -> Result<HashMap<String, String>, XlsxError> {
+        self.package.rels_for(part)
     }
-}
-
-fn parent_of(part: &str) -> &str {
-    match part.rsplit_once('/') {
-        Some((d, _)) => d,
-        None => "",
-    }
-}
-
-/// `Target` は相対パス。`../drawings/drawing1.xml` を解決する。
-fn normalize_part(base_dir: &str, target: &str) -> String {
-    if let Some(rest) = target.strip_prefix('/') {
-        return rest.to_string();
-    }
-    let mut parts: Vec<&str> = base_dir.split('/').filter(|s| !s.is_empty()).collect();
-    for seg in target.split('/') {
-        match seg {
-            "." | "" => {}
-            ".." => {
-                parts.pop();
-            }
-            s => parts.push(s),
-        }
-    }
-    parts.join("/")
-}
-
-// ─────────────────────────────────────────────────────────────
-// 最小の DOM
-// ─────────────────────────────────────────────────────────────
-
-#[derive(Debug, Default)]
-struct Node {
-    /// 接頭辞を落としたローカル名（`xdr:from` → `from`）
-    name: String,
-    attrs: Vec<(String, String)>,
-    text: String,
-    children: Vec<Node>,
-}
-
-impl Node {
-    fn attr(&self, name: &str) -> Option<&str> {
-        self.attrs
-            .iter()
-            .find(|(k, _)| k == name)
-            .map(|(_, v)| v.as_str())
-    }
-
-    fn child(&self, name: &str) -> Option<&Node> {
-        self.children.iter().find(|c| c.name == name)
-    }
-
-    fn child_text(&self, name: &str) -> Option<&str> {
-        self.child(name)
-            .map(|c| c.text.trim())
-            .filter(|t| !t.is_empty())
-    }
-
-    /// 文書順に子孫を返す。
-    ///
-    /// スタックに**逆順で積む**のが要点。順に積むと LIFO で逆順に返り、
-    /// シートの並び（画面定義が 1 枚目）が入れ替わる。
-    fn descendants<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a Node> + 'a {
-        let mut stack: Vec<&Node> = vec![self];
-        std::iter::from_fn(move || {
-            while let Some(n) = stack.pop() {
-                for c in n.children.iter().rev() {
-                    stack.push(c);
-                }
-                if n.name == name {
-                    return Some(n);
-                }
-            }
-            None
-        })
-    }
-}
-
-fn local(name: &[u8]) -> String {
-    let s = String::from_utf8_lossy(name);
-    match s.rsplit_once(':') {
-        Some((_, local)) => local.to_string(),
-        None => s.to_string(),
-    }
-}
-
-fn parse_tree(xml: &[u8]) -> Result<Node, XlsxError> {
-    let mut reader = Reader::from_reader(xml);
-    reader.config_mut().trim_text(true);
-
-    let mut root = Node::default();
-    let mut stack: Vec<Node> = Vec::new();
-    let mut buf = Vec::new();
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) => {
-                let mut node = Node {
-                    name: local(e.local_name().as_ref()),
-                    ..Default::default()
-                };
-                for a in e.attributes().flatten() {
-                    let key = local(a.key.local_name().as_ref());
-                    let val = String::from_utf8_lossy(&a.value).to_string();
-                    node.attrs.push((key, val));
-                }
-                stack.push(node);
-            }
-            Ok(Event::Empty(e)) => {
-                let mut node = Node {
-                    name: local(e.local_name().as_ref()),
-                    ..Default::default()
-                };
-                for a in e.attributes().flatten() {
-                    let key = local(a.key.local_name().as_ref());
-                    let val = String::from_utf8_lossy(&a.value).to_string();
-                    node.attrs.push((key, val));
-                }
-                match stack.last_mut() {
-                    Some(parent) => parent.children.push(node),
-                    None => root.children.push(node),
-                }
-            }
-            Ok(Event::Text(e)) => {
-                if let Some(top) = stack.last_mut() {
-                    top.text.push_str(&String::from_utf8_lossy(&e));
-                }
-            }
-            Ok(Event::End(_)) => {
-                let Some(node) = stack.pop() else { continue };
-                match stack.last_mut() {
-                    Some(parent) => parent.children.push(node),
-                    None => root.children.push(node),
-                }
-            }
-            Ok(Event::Eof) => break,
-            Ok(_) => {}
-            Err(e) => return Err(XlsxError::Xml(e.to_string())),
-        }
-        buf.clear();
-    }
-
-    Ok(root)
 }
 
 // ─────────────────────────────────────────────────────────────

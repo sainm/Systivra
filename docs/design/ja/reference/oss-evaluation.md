@@ -36,11 +36,10 @@
 
 | プロジェクト | 言語 | ライセンス | 活発度 | 分類 | 結論 | 確認 |
 |---|---|---|---|---|---|---|
-| Tree-sitter | C / Rust | MIT | 非常に高 | **C** | 構文層の主力。公式 grammar に **XML はない**。JSP の grammar もない（F-04） | [確] 0.27.1 |
-| OpenRewrite | Java | Apache-2.0（コア）/ 一部 Moderne Source Available | 非常に高 | **D** | 独立 Worker。LST と型解決のみ使用。**recipe 配布は使わない**（Code Genome Project の認証とライセンスを回避） | [確] 8.90.x |
+| Tree-sitter | C / Rust | MIT | 非常に高 | **C** | 構文層の主力。公式 grammar に **XML はない**。JSP の grammar もない（F-04） | [確] 0.25.10 |
 | jQAssistant | Java | GPL-3.0 | 中低 | F | コード構造を Neo4j に入れて Cypher で問う発想は同じ。GPL-3.0 は配布形に不適。活発度も不足 | [要確認] |
-| Spoon | Java | 要確認（Apache-2.0 系 / GPL 系） | 中 | E | メタプログラミングは強力だが、完全な classpath と大きなメモリを要する。OpenRewrite で足りる | [要確認] |
-| JavaParser | Java | Apache-2.0 | 高 | E | 軽量な構文解析。**型解決なし**。OpenRewrite 不可時の降格候補（構文レベルのみ） | [要確認] |
+| Spoon | Java | 要確認（Apache-2.0 系 / GPL 系） | 中 | E | メタプログラミングは強力だが、完全な classpath と大きなメモリを要する。ADR-017 の最終方式では使わない | [要確認] |
+| JavaParser | Java | Apache-2.0 | 高 | E | 軽量な構文解析。ADR-017 の最終方式では Tree-sitter とプロジェクト内シンボル索引を使う | [要確認] |
 
 ### 2.3 追跡 / テスト
 
@@ -82,8 +81,7 @@ React Flow
 
 ```text
 docling-serve 1.38.1      PDF / DOCX / PPTX
-OpenRewrite 8.90.x        Java LST と型解決
-Playwright 1.64.1         テスト実行
+Playwright 1.65.0         テスト実行
 ```
 
 ### 参考（A / B / E）

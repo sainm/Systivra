@@ -19,8 +19,14 @@ dist/
 .idea/
 .vscode/
 
+# ローカル原本（アップロードされた PDF）
+data/
+
 # ログ・テスト成果物
 *.log
 test-results/
 playwright-report/
 coverage/
+
+# Phase 8 backup artifacts
+backups/

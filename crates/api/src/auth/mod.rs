@@ -3,6 +3,7 @@
 //! 順序（`detail/05` §5.2）：`trace_id → 認証 → パス {pid} の照合 → SET LOCAL → 権限`。
 //! このファイルが前半 2 つ、`ProjectScope` が 3 つ目を受け持つ。
 
+pub mod rate_limit;
 pub mod session;
 
 use axum::extract::{Request, State};
@@ -32,7 +33,16 @@ pub async fn require_auth(State(state): State<ApiState>, mut req: Request, next:
     let authenticated = match extract_credential(&req) {
         Some(Credential::Token(t)) => state.app.authenticate_token(&t).await,
         Some(Credential::Session(raw)) => match state.session.verify(&raw, chrono::Utc::now()) {
-            Some(user) => state.app.authenticate_session(user).await,
+            Some(claims) => {
+                state
+                    .app
+                    .authenticate_session(
+                        claims.session_id,
+                        claims.user_id,
+                        state.session.idle_seconds(),
+                    )
+                    .await
+            }
             None => return unauthorized(&trace, "session cookie is invalid or expired"),
         },
         None => return unauthorized(&trace, "no credential"),

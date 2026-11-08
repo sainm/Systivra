@@ -23,6 +23,16 @@ tree-sitter-html.workspace = true
 zip.workspace = true
 quick-xml.workspace = true
 sha2.workspace = true
+pdf-extract = "0.12.1"
+unicode-normalization = "0.1.26"
+uuid.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+engine-rag.workspace = true
+engine-graph.workspace = true
+engine-code.workspace = true
 
 [[bin]]
 name = "systivra-worker"

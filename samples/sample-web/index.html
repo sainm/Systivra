@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Systivra SAMPLE - テスト対象</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; line-height: 1.6; }
+    .sample-mark { display: inline-block; border: 1px solid #888; padding: 0 6px; font-size: 12px; }
+    code { background: #f2f2f2; padding: 1px 4px; }
+  </style>
+</head>
+<body>
+  <span class="sample-mark">SAMPLE</span>
+  <h1>テスト対象システム（SAMPLE）</h1>
+  <p>Phase 6 の Playwright Runner が実行する合成画面です。実顧客データではありません。</p>
+  <ul>
+    <li><a href="/sample/user/edit/">ユーザ編集</a> - 入力検証と登録</li>
+  </ul>
+
+  <h2>影響項目（Q-01 由来のラベル）</h2>
+  <div id="impact-list">
+    <p>UserService.save(UserDto)</p>
+    <p>ユーザ編集画面</p>
+    <p>UserService.update(UserDto)</p>
+    <p>src/main/java/jp/example/service/UserService.java</p>
+  </div>
+
+  <footer><span class="sample-mark">SAMPLE</span></footer>
+</body>
+</html>

@@ -4,6 +4,12 @@
 
 **正本**：DDL は `detail/02-database-ddl.md`、Fact Schema は `05-データモデル.md` §4、関係型は `04-コアエンジン.md` §3 の Ontology 登録簿、位置情報は `00-全体設計.md` J-02 / J-03、受入は `08-実装計画.md` Phase 4。本稿はその間の**処理手順と契約**だけを定義する。
 
+> 2026-11-07 の source-only 縦断実装は [`docs/phase4/acceptance.md`](../../../phase4/acceptance.md)。
+> `engine-code` の Tree-sitter、元バイト偏移、Fact、増分、API / UI、Git 同期は動作する。
+> 13,000 Java 相当、2.5M Fact 相当の COPY / supersede / Neo4j 再投影は実測済み。
+> 型解決は ADR-017 により行わない。OpenRewrite / 顧客 classpath と解析による
+> 2.5M Fact 生成は外部依存であり、本受入の PASS には含めない。
+
 ---
 
 ## 1. 入力規模と前提
@@ -19,9 +25,11 @@
 | 実行環境 | 顧客閉域網。外部ネットワークなし | A-03 |
 | 改コード | **禁止**（D-04）。出力は Fact と証拠だけ | D-04 |
 
-**前提条件（満たせない場合は明示降格）**：
+**前提条件**：
 
-- `classpath` を顧客が提供できること。不能なら OpenRewrite の型解決を止め、全件を構文レベルに降格し `classpath_complete=false` を帳票に出す（R-03）。
+- 同一 revision のソースから **プロジェクト内シンボル索引**を作り、型・名前・引数数で照合する。
+- 複数候補を受け入れ、一意でない関係は `INFERRED`、根拠不足は `UNRESOLVED` として提示する。
+- 人手確認を一級の情報源とし、確認結果を Fact の候補と証拠に残す。
 - 解析対象は **SAMPLE + 実案件 1 件が使うフレームワークに限定**。全フレームワーク対応を Phase 4 で目指さない（R-07）。
 - アダプタは登録式プラグイン。未知フレームワークは「解析しない」と明示し、黙って `RESOLVED` を出さない。
 
@@ -30,50 +38,29 @@
 ## 2. 全体パイプライン
 
 ```text
-[1] 同期      git / SVN → code_revision（差分ハッシュ、変更ファイル一覧）
+[1] 同期      Git / DIR / SNAPSHOT → code_revision（差分ハッシュ、変更ファイル一覧）
 [2] 前処理    文字コード判定（chardetng + encoding_rs）→ UTF-8 内部表現
              元バイトと line_offsets（行開始バイト偏移）を artifact に保存
-[3] 構文層    Rust + Tree-sitter：全 14,000 ファイルを全面走査
+[3] 構文・関係抽出
+             Rust + Tree-sitter：全 14,000 ファイルを全面走査
              → symbol / 構文 CALLS / DECLARES / JSP 構造 / XML 要素
-[4] 意味層    Java 21 + OpenRewrite：Java のみ。classpath で型解決
-             → シグネチャ確定 CALLS / EXTENDS / IMPLEMENTS
-[5] 統合      NDJSON を Fact へ。衝突は OpenRewrite を優先し、
-             Tree-sitter 側を INFERRED に降格
-[6] アダプタ  Struts1 / SAStruts / Seasar2 / Dicon / Tag / 反射 / 動的プロキシ
-             → HANDLES / DISPATCHES / DEPENDS_ON / SUBMITS_TO …
-[7] 永続化    supersede_then_insert（1 tx）+ COPY バルク + evidence 添付
-[8] 投影      outbox: FactAccepted → Neo4j（detail/07）。chunk は投影しない
+             プロジェクト内シンボル索引：同一 revision の class / method / field を照合
+             → 一意な CALLS / EXTENDS / IMPLEMENTS、複数候補は INFERRED
+             Framework Adapter：HANDLES / DISPATCHES / DEPENDS_ON / SUBMITS_TO …
+[4] 統合・永続化・投影
+             Fact 正規化 → supersede_then_insert（1 tx）+ COPY バルク
+             → evidence 添付 → outbox: FactAccepted → Neo4j（detail/07）
 ```
-
-> **[3] と [4] は別プロセス**。`crates/engine-code`（Rust）と `workers/rewrite`（Java 21 + Gradle）。境目は NDJSON だけで、共有メモリも RPC も使わない。片方が落ちても他方の成果は残る。
 
 ---
 
-## 3. プロセス間契約（NDJSON）
+## 3. Fact 出力契約（NDJSON スナップショット）
 
-`workers/rewrite` が 1 ファイルつき 1 行を stdout に書く。Rust 側は行単位で読み、途中で落ちた行は捨ててそのファイルだけ再投入する。
-
-### 3.1 Rust → Java（入力）
-
-```json
-{"v":1,"job_id":"j8...","revision":"svn-18422","file":"src/main/java/.../UserEditAction.java","encoding":"WINDOWS_31J","classpath_key":"cp-9f2...","byte_size":18422}
-```
-
-| フィールド | 型 | 規約 |
-|---|---|---|
-| `v` | int | 契約版。不一致は拒否 |
-| `revision` | string | `code.code_revision` と一致 |
-| `file` | string | リポジトリ相対パス。**UTF-8** |
-| `encoding` | enum | `UTF_8` / `SHIFT_JIS` / `WINDOWS_31J` / `EUC_JP` / `UNKNOWN` |
-| `classpath_key` | string | `code.classpath_index` のキー。無い場合は `null` |
-| `byte_size` | int | 元ファイルのバイト数。位置検証に使う |
-
-`encoding = UNKNOWN` または判定信頼度 < 0.75 のときは **推測せず `ENCODING_UNDETECTED`** でスキップし、未解析一覧に出す（R-22）。
-
-### 3.2 Java → Rust（出力）
+Fact は Rust 内で生成・正規化する。NDJSON は、golden fixture の比較と大きな解析結果の
+受け渡しに使うスナップショット形式であり、別プロセスの型解決契約ではない。
 
 ```json
-{"v":1,"file":"src/main/java/.../UserEditAction.java","ok":true,"classpath_complete":true,"facts":[{"relation":"CALLS","subject":{"kind":"Method","key":"jp.co...UserEditAction.update"},"object":{"kind":"Method","key":"jp.co...UserService.update(UserDto)"},"resolution":"RESOLVED","confidence":0.99,"evidence":[{"kind":"source","path":"src/main/java/.../UserEditAction.java","byte_start":8120,"byte_end":8164,"line":142,"quote":"userService.update(dto);"}]}]}
+{"v":1,"file":"src/main/java/.../UserEditAction.java","ok":true,"facts":[{"relation":"CALLS","subject":{"kind":"Method","key":"jp.co...UserEditAction.update"},"object":{"kind":"Method","key":"jp.co...UserService.update(UserDto)"},"resolution":"INFERRED","confidence":0.75,"candidates":["jp.co...UserService.update(UserDto)","jp.co...UserService.update(Object)"],"evidence":[{"kind":"source","path":"src/main/java/.../UserEditAction.java","byte_start":8120,"byte_end":8164,"line":142,"quote":"userService.update(dto);"}]}]}
 ```
 
 | フィールド | 規約 |
@@ -82,10 +69,14 @@
 | `relation` | Ontology 登録簿の固定集合のみ。`^[A-Z_]+$` |
 | `resolution` | `RESOLVED / INFERRED / PARTIAL / UNRESOLVED / CONFLICT` |
 | `confidence` | 0〜1。`RESOLVED` は ≥ 0.95、`INFERRED` は 0.5〜0.9 を目安 |
+| `candidates` | 複数候補を保持し、一意に決められない場合は `INFERRED / UNRESOLVED` とする |
 | `evidence[]` | **1 件以上**。`quote` は原文の完全な部分文字列（NFC） |
 | `byte_start / byte_end` | **元ファイルのバイト偏移**。UTF-8 変換後の偏移ではない |
 | `line` | 元ファイルの行番号（1 始まり）。`line_offsets` から算出 |
-| `classpath_complete` | false なら全 Fact を `PARTIAL` 以下に降格 |
+
+`analysis_run` / API には互換フィールド `classpath_complete` が残る。最終設計では
+classpath を使った型解決を行わないため、値は常に `false` である。これは解析失敗ではなく、
+「classpath 型解決を実施していない」という意味に固定する。
 
 **失敗行**：
 
@@ -196,7 +187,7 @@ class J{void m(){
 | A-08 | 文字列連結 SQL | `"SELECT … " + tbl` | `QUERIES`（Table 候補） | UNRESOLVED | テーブル名が定数なら RESOLVED に昇格可 |
 | A-09 | 動的プロキシ | `Proxy.newProxyInstance` / AOP 設定 | `DEPENDS_ON` | INFERRED | 実装クラスを確定させない |
 | A-10 | MyBatis Mapper XML | namespace + `<select id>` + SQL | `QUERIES`（Mapper → Table） | RESOLVED | 動的 `<if>` は分岐を列挙し `candidates` へ |
-| A-11 | 標準 Java | 構文 + 型解決 | `CALLS / EXTENDS / IMPLEMENTS / DECLARES / IMPORTS` | 下表 | — |
+| A-11 | 標準 Java | 構文 + プロジェクト内シンボル索引 | `CALLS / EXTENDS / IMPLEMENTS / DECLARES / IMPORTS` | 下表 | — |
 
 ### 5.1 Fact 生成規則（`04-コアエンジン.md` §4 と同一）
 
@@ -204,8 +195,9 @@ class J{void m(){
 |---|---|---|
 | Tree-sitter シンボル | `DECLARES` | RESOLVED（構文確定） |
 | Tree-sitter 呼び出し | `CALLS`（名前一致のみ） | INFERRED |
-| OpenRewrite メソッド解決 | `CALLS`（シグネチャまで） | RESOLVED |
-| OpenRewrite 継承 | `EXTENDS` / `IMPLEMENTS` | RESOLVED |
+| プロジェクト内シンボル索引（一意） | `CALLS` / `EXTENDS` / `IMPLEMENTS` | RESOLVED |
+| プロジェクト内シンボル索引（複数候補） | `CALLS` / `EXTENDS` / `IMPLEMENTS` | INFERRED |
+| 人手確認 | 対象の Fact | 確認結果を証拠付きで記録 |
 | Struts config | `HANDLES` | RESOLVED |
 | 注釈マッピング | `HANDLES` | RESOLVED |
 | Dicon DI | `DEPENDS_ON` | RESOLVED |
@@ -213,7 +205,7 @@ class J{void m(){
 | JSP form → Action | `SUBMITS_TO` | PARTIAL |
 | MyBatis XML | `QUERIES` | RESOLVED |
 
-**衝突解決**：同じ `(subject, relation, object)` に複数アナライザーが出した場合、OpenRewrite > XML/config > Tree-sitter の順で採る。落とした側は削除せず `fact.candidates` / `analysis_run` に残し、影響分析で「なぜ RESOLVED か」を辿れるようにする。
+**衝突解決**：同じ `(subject, relation, object)` に複数アナライザーが出した場合、XML/config > Tree-sitter の順で採る。落とした側は削除せず `fact.candidates` / `analysis_run` に残し、影響分析で「なぜ RESOLVED か」を辿れるようにする。人手確認は一級の情報源とし、確認した対象・結果・証拠を Fact に残す。
 
 **関係型の書き込み**：Cypher 5 では関係型をパラメータ化できない。Ontology 登録簿で `^[A-Z_]+$` を検証した識別子だけを文字列連結する。動的生成は禁止（`05` §3.3）。`SUBMITS_TO` は登録簿に追加済み。
 
@@ -239,23 +231,23 @@ COMMIT
 
 - repository 層の `supersede_then_insert(tx, facts)` **以外から `code.fact` へ INSERT させない**。
 - 統合テスト：同一キーで 2 回再解析 / 並列 2 セッション / ロールバック後の live 行数が 1。
-- 順序を逆にすると unique 違反で増分が止まる（`review-2026-11-05.md` C-2 の解決）。
+- 順序を逆にすると unique 違反で増分が止まる（`supersede_then_insert` 規約）。
 
 ### 6.2 バルクと性能
 
 | 項目 | 規約 |
 |---|---|
-| 書き込み | `COPY` 5,000 行ごと。行 INSERT は使わない（`detail/03` §6.1） |
+| 書き込み | Fact / evidence は `COPY` 5,000 行ごと。単一行 INSERT を通常経路にしない |
 | Fact 250 万行 | 単一表・非分区。`(project_id, revision_id)` 索引 |
 | 古い revision | `valid_to` 付きは export 後にアーカイブ。削除は論理 → 非同期 |
-| `kb.chunk` との対応 | **コード Fact から chunk を作らない**。chunk は設計書由来だけで 1,200 万 |
+| `corpus.chunk` との対応 | **コード Fact から chunk を作らない**。chunk は設計書由来だけで 1,200 万 |
 | グラフ投影 | Fact は outbox 経由で `graph_meta.entity` / `relationship` と Neo4j へ。Fact 自体を Neo4j に置かない |
 
 ### 6.3 `classpath_index`
 
-- 顧客提供の jar / 依存ツリーを `code.classpath_index` に登録し、`classpath_key` で参照。
-- 構築失敗率 > 30% で Phase 4 のゲートを「全面構文レベル」に降格（R-03 / `08` §8）。
-- 降格時は `classpath_complete=false` を `analysis_run` と帳票の両方に出す。**黙った精度低下を禁止**。
+- `code.classpath_index` は後方互換のため schema に残すが、最終設計では登録・参照しない。
+- `analysis_run.classpath_complete` も互換フィールドとして残し、型解決を行わないため常に `false` とする。
+- UI / 帳票では `false` を「classpath 型解決を実施していない」と表示し、解析失敗と混同しない。
 
 ---
 
@@ -263,9 +255,9 @@ COMMIT
 
 ```text
 1. code_revision を同期。前版との content_hash 差分で変更ファイル一覧を作る
-2. 変更ファイル + その直接参照元（逆依存 1 層）だけを再解析対象にする
-3. 依存する classpath / dicon / struts-config が変わった場合は影響ファイルを追加
-4. 対象外は既存 Fact をそのまま残す（再計算しない）
+2. 変更ファイルを再解析対象にする。未変更 Java 型は型解決文脈として読み、Fact / Symbol は前版からバッチ再利用する
+3. 依存する dicon / struts-config や、プロジェクト内シンボル索引の版が変わった場合は影響ファイルを追加
+4. 対象外の Fact / Symbol は current revision へバッチコピーし、graph / outbox も再投影する
 5. 再解析分だけ supersede_then_insert
 ```
 
@@ -280,11 +272,11 @@ COMMIT
 | 段 | 速度目安 | 13,000 ファイル | 対策 |
 |---|---|---|---|
 | 文字コード判定 | 全ファイル | 数分 | 先頭 64KB で判定、信頼度 < 0.75 は保留 |
-| Tree-sitter 構文 | 200 ファイル/秒/コア | 1〜2 分（8 コア） | ファイル単位で並列、grammar 版固定 |
-| OpenRewrite 意味 | 20 ファイル/秒 | 約 11 分 | classpath を 1 回構築して使い回す |
+| Tree-sitter 構文 | 実測で校正 | 13,000 ファイル / 21.79 秒 | 単一 worker、synthetic SAMPLE |
+| プロジェクト内シンボル索引 | Phase 4 の実測で校正 | 91,000 Symbol / 104,000 Fact | revision 単位で索引を 1 回構築 |
 | JSP 等長置換 | 300 ファイル/秒 | 数秒 | 位置は置換前のバイトで保持 |
-| Fact 統合 + COPY | 50,000 行/秒 | 50 秒（250 万行） | NDJSON → COPY |
-| 合計（初回） | — | **30〜60 分**（実測で校正） | Phase 4 中に 1,000 ファイルで較正 |
+| Fact 統合 + COPY | 129,847 行/秒（実測） | 19.253 秒（250 万行） | CSV → COPY 5,000 行 × 500 文 |
+| 合計（初回） | — | 13,000 Java 相当 21.79 秒 | 構文・シンボル索引・Fact、graph batch 込み |
 
 > この数字は Phase 4 の SAMPLE 較正値で置き換える。**60,000 冊 Excel の 24〜48 時間とは別工程**であり、両者を足して「初回取込」と呼ばない（`detail/03` §3）。
 
@@ -295,13 +287,11 @@ COMMIT
 | # | 失敗 | 検知 | 挙動 | UI / 帳票 |
 |---|---|---|---|---|
 | F-01 | 文字コード判定不能 | 信頼度 < 0.75 | そのファイルをスキップ | 未解析一覧、`ENCODING_UNDETECTED` |
-| F-02 | classpath 構築失敗 | 失敗率 > 30% | 全面構文レベル | `classpath_complete=false` |
-| F-03 | OpenRewrite が 1 ファイルで例外 | `ok=false` 行 | そのファイルだけ Tree-sitter 結果を採用 | 部分失敗数 |
-| F-04 | JSP 行位置が 2 行超ずれ | プロパティテスト | ファイル単位位置に退避 | `PARTIAL` 明示 |
-| F-05 | 反射を RESOLVED と誤判定 | CI の SAMPLE 検査 | ビルド失敗 | — |
-| F-06 | 未知フレームワーク | アダプタ未登録 | 解析しない | 「未対応」を明示。沈黙しない |
-| F-07 | `fact_unique_live` 衝突 | unique 違反 | tx ロールバック + 警告 | 増分失敗として再実行 |
-| F-08 | evidence が 0 件 | Schema 検証 | Fact を拒否 | `VALIDATION_SCHEMA` |
+| F-02 | JSP 行位置が 2 行超ずれ | プロパティテスト | ファイル単位位置に退避 | `PARTIAL` 明示 |
+| F-03 | 反射を RESOLVED と誤判定 | CI の SAMPLE 検査 | ビルド失敗 | — |
+| F-04 | 未知フレームワーク | アダプタ未登録 | 解析しない | 「未対応」を明示。沈黙しない |
+| F-05 | `fact_unique_live` 衝突 | unique 違反 | tx ロールバック + 警告 | 増分失敗として再実行 |
+| F-06 | evidence が 0 件 | Schema 検証 | Fact を拒否 | `VALIDATION_SCHEMA` |
 
 ---
 
@@ -333,7 +323,8 @@ COMMIT
 - SAMPLE 案件でクラス / メソッド認識率 **98% 以上**、メソッド呼び出し（`RESOLVED` 辺）の precision **98% 以上**。
 - 反射 / 動的プロキシ 30 件がすべて `INFERRED` または `UNRESOLVED`。`RESOLVED` 誤記 **0**。
 - 増分：1 ファイル変更で再解析が全件の **10% 未満**。
-- classpath なし：構文レベルへ降格し `classpath_complete=false` が帳票に出る。
+- プロジェクト内で型・名前・引数数が一意なら `RESOLVED`、複数候補または外部型なら
+  `INFERRED / UNRESOLVED` とし、`RESOLVED` を偽装しない。
 - 任意の Fact から `source_file` の元バイト位置へ戻れ、`quote` が原文の部分文字列として検証できる。
 - **世界中のどの画面でも「解析不足」が隠れない**。未解析率・部分失敗数・降格理由を `analysis_run` から必ず表示する。
 

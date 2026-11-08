@@ -84,14 +84,14 @@ loop {
            FROM core.outbox_event
           WHERE published_at IS NULL AND NOT dead_letter
           ORDER BY seq
-          LIMIT 200
+          LIMIT 5000
           FOR UPDATE SKIP LOCKED"
     ).fetch_all(&pool).await?;
 
-    for ev in events {
-        match project_one(&neo4j, &ev).await {
-            Ok(_)  => mark_published(&pool, ev.event_id).await?,
-            Err(e) => record_failure(&pool, &ev, e).await?,  // バッチは止めない
+    for chunk in group_by_event_and_relation_type(&events).chunks(1000) {
+        match project_unwind_batch(&neo4j, chunk).await {
+            Ok(_)  => mark_published_batch(&pool, chunk).await?,
+            Err(e) => record_failure_batch(&pool, chunk, e).await?,  // バッチは止めない
         }
     }
     if events.is_empty() { tokio::time::sleep(Duration::from_millis(500)).await; }
@@ -171,9 +171,13 @@ UPDATE graph_meta.projection_state
 
 ---
 
-## 5. 全件再構築（`POST /admin/graph/rebuild`）
+## 5. 全件再構築（`POST /api/v1/projects/{pid}/graph/rebuild`）
 
 **旧グラフを消してから書き直さない**。影ラベルに構築し、検証してから読み取りを切り替える（I-5）。
+
+> 2026-11-07 の実装は in-place の同期 API である。PG live 行を keyset で 1,000 件ずつ読み、
+> Neo4j の project scope を `clear_project` 後に `UNWIND` 再投影する。2.5M 辺は 176.168 秒で
+> PG / Neo4j / API 件数一致。影ラベルと切替は依然として未実装（§12）。
 
 ```text
 [1] graph_meta.projection_build に status=BUILDING で 1 行作る
@@ -298,5 +302,38 @@ let cypher = format!(
 | 設計書の構造木 | `DocumentNodeUpserted` を受ける | `detail/01-excel-ingestion.md`（cell は投影しない） |
 | 分区 / RLS | 図には無関係 | `detail/02-database-ddl.md` §6 |
 | 走査速度 | BFS の層バッチ規約を守る | `detail/03-performance.md` §4 |
-| API | `/admin/graph/rebuild` は 202 + job | `06-API.md` §1 / `detail/04-api-contract.md` §3 |
+| API | `/api/v1/projects/{pid}/graph/rebuild` は同期 200 + 件数 | `06-API.md` §1 / `detail/04-api-contract.md` §3 |
 | 影響分析 | 辺の `resolution` / `confidence` を提供 | `04-コアエンジン.md` §5 |
+
+---
+
+## 12. 実装状況（2026-11-07）
+
+Phase 3 の実装は本書の不変条件のうち I-1 / I-2 / I-3 / I-4 / I-6 を満たす。I-5（無停止の影ラベル再構築）は
+**降格**しており、現状は in-place の全件再構築である。受入の実測値と未実施項目は
+`docs/phase3/acceptance.md` に記録する。
+
+| 項目 | 実装 | 設計との差分 |
+|---|---|---|
+| Ontology v1 | 56 実体型 / 27 関係型（7 クラスタ: 業務・文書・設計・アプリ・コード/DB・テスト・AI/分析） | 実体型は「約 60」の範囲。関係型は設計の 20 より 7 多い（登録のみで、現時点の投影に使うのは `CONTAINS` だけ） |
+| Ontology 公開 | `POST /graph/ontology/publish` が最新 PUBLISHED の型を複製し、新版を PUBLISHED、旧版を DEPRECATED にする | 型の追加・編集 UI は無い（閲覧 + 公開のみ） |
+| 正本 / Outbox | `graph_meta.entity` / `relationship` と `core.outbox_event` を同一 tx で書く。`DocumentNodeUpserted` / `RelationshipUpserted` / `ProjectionTombstone` | event payload は本書 §2 の最小項目 + `src_type` / `dst_type` |
+| 順序保証 | 実体・関係とも `projection_seq` の条件付き書き込み（`WHERE e.projection_seq <= $seq`） | 関係の `projection_seq` は `012_graph_relationship_seq.sql` で追加 |
+| Projector | worker の各 tick 末尾に outbox を最大 5,000 件取得し、event／関係型ごとに最大 1,000 件を `UNWIND`。失敗は 3 回で dead letter | 複数 projector は未実装。単一 worker 前提 |
+| 全件再構築 | `POST /graph/rebuild` が PG の live 行を keyset で 1,000 件ずつ読み、`clear_project` 後に `UNWIND` 再投影。`projection_build.shadow_label='in-place'` | 影ラベル・差分追従・VERIFYING → SWITCHED・ABORT は未実装。再構築中は読み取りが一時的に欠ける |
+| 漂流検出 | `GET /graph/stats` が PG / Neo4j の件数と `drift_rate` を都度比較 | 日次バッチ・ホームの完全性表示・警報は未実装 |
+| 削除伝播 | 論理削除 → `ProjectionTombstone` → Neo4j `DETACH DELETE` | 1 実体 1 イベント。1,000 件分割削除は未実装 |
+| 構造木の投影 | Document / Sheet / Section / Region / Table を投影 | **chunk は投影しない**（I-3）。Phase 3 受入文の「Document/Section/Chunk」は chunk を除く構造実体として解釈 |
+| `revision` / `valid_to` | 実体に `revision` / `first_seen_rev` / `last_seen_rev`、関係に `revision` / `valid_to` | 改版切替時の旧版 tombstone（`DocumentRevisionSuperseded`）は未実装。Phase 1 の改版履歴未実装に依存 |
+| PgGraphProvider lite | 実体検索・隣接・経路・サブグラフ・トレーサビリティを再帰 CTE で実装。深さは 3 ホップに clamp | 専用 trait は置かず `store` のメソッド群。API から利用 |
+| Neo4j | ローカル検証は Neo4j 2026.05.0 Community（`bolt://localhost:7687`） | 設計の 5.26 LTS とは版が異なる。compose は `neo4j:5.26-community` を定義（未検証） |
+
+### 12.1 受入との対応
+
+| 受入 | 結果 |
+|---|---|
+| Document/Section グラフ構築・ノード数 PG 一致（誤差 0） | **PASS**（PG 5 / Neo4j 5、関係 4 / 4、drift 0.0） |
+| 隣接 P95 < 200ms（10 万ノード） | **PASS（合成データ）** P95 5.325ms / 平均 4.977ms / 100 回。PG lite の再帰 CTE で測定 |
+| 250 万 Fact 相当の全件再投影 | **PASS（合成）** 5,506 entity / 2,500,005 relationship、173.117s。PG / Neo4j / API 件数一致 |
+| 投影器 10 分停止 → 再開で一致・重複辺なし | **一部未実施**。3 秒停止で outbox 追従と復旧を実測。10 分停止は未実施。再構築 2 回で辺の重複 0（`count(r)=count(DISTINCT r.rel_id)`） |
+| 文書削除後 1 分以内に関連ノード消滅 | **PASS**（削除ジョブから 4 秒以内、drift 0） |

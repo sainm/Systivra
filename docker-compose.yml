@@ -4,7 +4,7 @@
 
 services:
   db:
-    image: postgres:18
+    image: pgvector/pgvector:pg18
     environment:
       POSTGRES_DB: systivra
       POSTGRES_USER: postgres
@@ -12,7 +12,7 @@ services:
       # 日本語照合順序。PDF の本文を LIKE で探すときに効く。
       LANG: ja_JP.UTF-8
     ports:
-      - "5432:5432"
+      - "15432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       # 初回起動時だけ流れる。順序はファイル名順。
@@ -21,12 +21,42 @@ services:
       - ./migrations/001_core.sql:/docker-entrypoint-initdb.d/10_001_core.sql:ro
       - ./migrations/002_core_ops.sql:/docker-entrypoint-initdb.d/11_002_core_ops.sql:ro
       - ./migrations/003_authz.sql:/docker-entrypoint-initdb.d/12_003_authz.sql:ro
+      - ./migrations/004_corpus_document.sql:/docker-entrypoint-initdb.d/13_004_corpus_document.sql:ro
+      - ./migrations/005_corpus_chunk.sql:/docker-entrypoint-initdb.d/14_005_corpus_chunk.sql:ro
+      - ./migrations/006_corpus_evidence.sql:/docker-entrypoint-initdb.d/15_006_corpus_evidence.sql:ro
+      - ./migrations/007_job_events.sql:/docker-entrypoint-initdb.d/16_007_job_events.sql:ro
+      - ./migrations/008_project_of.sql:/docker-entrypoint-initdb.d/17_008_project_of.sql:ro
+      - ./migrations/009_rename_corpus.sql:/docker-entrypoint-initdb.d/18_009_rename_corpus.sql:ro
+      - ./migrations/010_index_build_active.sql:/docker-entrypoint-initdb.d/19_010_index_build_active.sql:ro
+      - ./migrations/011_graph.sql:/docker-entrypoint-initdb.d/20_011_graph.sql:ro
+      - ./migrations/012_graph_relationship_seq.sql:/docker-entrypoint-initdb.d/21_012_graph_relationship_seq.sql:ro
+      - ./migrations/013_code.sql:/docker-entrypoint-initdb.d/22_013_code.sql:ro
+      - ./migrations/014_impact.sql:/docker-entrypoint-initdb.d/23_014_impact.sql:ro
+      - ./migrations/015_test.sql:/docker-entrypoint-initdb.d/24_015_test.sql:ro
+      - ./migrations/016_ai.sql:/docker-entrypoint-initdb.d/25_016_ai.sql:ro
+      - ./migrations/017_inquiry.sql:/docker-entrypoint-initdb.d/26_017_inquiry.sql:ro
+      - ./migrations/018_sso.sql:/docker-entrypoint-initdb.d/27_018_sso.sql:ro
+      - ./migrations/019_session.sql:/docker-entrypoint-initdb.d/28_019_session.sql:ro
+      - ./migrations/021_session_identity.sql:/docker-entrypoint-initdb.d/29_021_session_identity.sql:ro
+      - ./migrations/022_scim.sql:/docker-entrypoint-initdb.d/30_022_scim.sql:ro
+      - ./migrations/023_first_project.sql:/docker-entrypoint-initdb.d/31_023_first_project.sql:ro
+      - ./migrations/024_code_schema_repair.sql:/docker-entrypoint-initdb.d/32_024_code_schema_repair.sql:ro
       - ./deployment/postgres/roles.sql:/docker-entrypoint-initdb.d/90_roles.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d systivra"]
       interval: 3s
       timeout: 3s
       retries: 20
+
+  neo4j:
+    image: neo4j:5.26-community
+    environment:
+      NEO4J_AUTH: neo4j/systivra-dev-password
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4jdata:/data
 
   api:
     build:
@@ -39,24 +69,54 @@ services:
       # 開発用の固定値。本番では Secrets から注入し、必ず 32 バイト以上にする。
       SESSION_SECRET: dev-only-session-secret-0123456789abcdef
       SESSION_COOKIE_SECURE: "false"
+      PUBLIC_BASE_URL: http://localhost:3000
+      SYSTIVRA_DATA_DIR: /data
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: systivra-dev-password
     ports:
       - "8080:8080"
+    volumes:
+      - appdata:/data
     depends_on:
       db:
         condition: service_healthy
+      neo4j:
+        condition: service_started
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      api:
+        condition: service_started
 
   worker:
     build:
       context: .
       dockerfile: deployment/docker/Dockerfile
     # worker は別ロールで動かす（detail/02 §0.1）。API と同じロールにしない。
-    command: ["systivra-worker"]
+    # イメージの ENTRYPOINT は API なので、worker は entrypoint ごと差し替える。
+    entrypoint: ["systivra-worker"]
     environment:
       DATABASE_URL: postgres://systivra_scheduler@db:5432/systivra
       RUST_LOG: info
+      SYSTIVRA_DATA_DIR: /data
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: systivra-dev-password
+    volumes:
+      - appdata:/data
     depends_on:
       db:
         condition: service_healthy
+      neo4j:
+        condition: service_started
 
 volumes:
   pgdata:
+  appdata:
+  neo4jdata:

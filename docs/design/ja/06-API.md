@@ -60,6 +60,65 @@
 
 ## 2. エンドポイント一覧
 
+### 2.0 認証（Phase 8 追補）
+
+| メソッド | パス | 説明 | 権限 |
+|---|---|---|---|
+| POST | `/auth/login` | パスワードログイン。`Set-Cookie: systivra_session` | 公開 |
+| POST | `/auth/logout` | Cookie を消し、サーバー側セッションを失効させる | 公開 |
+| GET | `/auth/me` | 本人と所属 | 認証必須 |
+| GET | `/auth/config` | 利用可能な認証方式（パスワード / OIDC） | 公開 |
+| GET | `/auth/oidc/start?return_to=/` | IdP の認可エンドポイントへ 303 | 公開 |
+| GET | `/auth/oidc/callback` | 認可コード + PKCE を交換し、セッションを発行して元画面へ 303 | 公開 |
+| POST | `/auth/oidc/backchannel-logout` | logout token を検証し、sub / sid でセッションを失効 | 公開 |
+| GET | `/auth/sessions` | 自分の有効なセッション一覧 | 認証必須 |
+| DELETE | `/auth/sessions/{sid}` | 自分のセッションを個別失効 | 認証必須 |
+| POST | `/auth/logout-all` | 現在以外のセッションを全失効 | 認証必須 |
+| GET | `/projects/{pid}/members` | メンバーとロール | Owner / Architect |
+| PATCH | `/projects/{pid}/members/{uid}` | ロール変更 | Owner |
+| GET/POST | `/scim/v2/Users` | SCIM Users の一覧 / 作成 | `SCIM_BEARER_TOKEN` |
+| GET/PATCH/DELETE | `/scim/v2/Users/{id}` | 取得 / active 変更 / 無効化 | `SCIM_BEARER_TOKEN` |
+| GET/POST | `/scim/v2/Groups` | SCIM Groups の一覧 / 作成 | `SCIM_BEARER_TOKEN` |
+| GET/PUT/DELETE | `/scim/v2/Groups/{id}` | 取得 / 更新 / 削除 | `SCIM_BEARER_TOKEN` |
+
+OIDC は `OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` で有効になる。
+未設定なら `/auth/config` の `oidc` は `null` で、パスワードログインだけを提供する。
+`/auth/oidc/start` は未設定・IdP 停止時に `503 AUTH_SSO_UNAVAILABLE` を返す。
+`state` / `nonce` / PKCE(S256) を検証し、未知の `subject` は
+`/login?sso_error=not_linked` へ戻す（自動プロビジョニングしない）。
+
+紐付けは管理者が事前に行う。
+
+```sql
+INSERT INTO core.external_identity (user_id, provider, subject, email)
+VALUES ('<user uuid>', '<OIDC_ISSUER>', '<IdP の sub>', 'user@example.com');
+```
+
+`provider` は issuer URL そのもの。`OIDC_REDIRECT_URI` はブラウザから見た
+Web オリジン（例 `https://systivra.example.com/api/v1/auth/oidc/callback`）にする。
+
+セッションは `core.session` に実体を持ち、Cookie は `session_id:user_id:exp` を
+HMAC 署名したもの。`logout` は現在のセッションを `revoked_at` で失効させるため、
+盗まれた Cookie を再利用しても 401 になる。復元訓練では復元後に全セッションを失効させる。
+
+`/auth/login`・`/auth/oidc/start`・`/auth/oidc/callback` は IP 単位の
+トークンバケットで制限する（既定 容量 10 / 毎分 10 補充）。超過は
+`429 AUTH_RATE_LIMITED` + `Retry-After`。`TRUST_PROXY=1` のときだけ
+`X-Forwarded-For` の先頭を使い、それ以外は接続元 IP を使う。
+
+全応答に `X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`、
+`X-Frame-Options: DENY`、`Permissions-Policy` を付け、https 設定時のみ HSTS を付ける。
+
+セッションは `SESSION_IDLE_MINUTES` でアイドル期限を追加でき、worker が期限切れ・
+失効済みを 7 日後に削除する。IdP 主導ログアウトは logout token の署名・iss・aud・exp・
+back-channel event・jti リプレイを検証し、`sub` または `sid` が一致するセッションを失効させる。
+
+SCIM は `SCIM_BEARER_TOKEN` を設定したときだけ有効（未設定は 404）。Groups の
+`urn:systivra:params:scim:schemas:extension:role` でロールを指定する。OIDC の
+`groups` claim とグループ名が一致すると、最も強いロールをプロジェクトメンバーへ付与する。
+
+---
+
 ### 2.1 Workspace / Project
 
 | メソッド | パス | 説明 | 権限 |
@@ -78,34 +137,46 @@
 |---|---|---|---|
 | POST | `/projects/{pid}/documents:upload-url` | 署名付き upload URL 発行（Phase 1 はローカル PUT） | `document:write` |
 | PUT | `/uploads/{token}` | 署名 token による原本 PUT（Phase 1 ローカル） | signed token |
-| POST | `/projects/{pid}/documents:bulk-import` | マニフェストによる一括取込（Phase 2） | `document:write` |
+| POST | `/projects/{pid}/documents:bulk-import` | マニフェストによる一括取込（実装済み・ローカル manifest） | `document:write` |
 | POST | `/projects/{pid}/documents` | 登録（アップロード後） | `document:write` |
 | GET | `/projects/{pid}/documents` | 一覧（type/domain/status） | `document:read` |
 | GET | `/documents/{did}` | 詳細 + 現行改版 | `document:read` |
-| GET | `/documents/{did}/content` | PDF 原本のバイト列 | `document:read` |
-| GET | `/documents/{did}/revisions` | 改版履歴（Phase 2） | `document:read` |
+| GET | `/documents/{did}/content` | 原本のバイト列 | `document:read` |
+| GET | `/documents/{did}/revisions` | 改版履歴（未実装） | `document:read` |
 | POST | `/documents/{did}/revisions/{rid}:parse` | 解析開始（非同期） | `document:write` |
-| GET | `/documents/{did}/tree?revision_id=` | 構造木（Phase 2） | `document:read` |
+| GET | `/documents/{did}/tree?revision_id=` | 構造木（実装済み） | `document:read` |
+| GET | `/documents/{did}/chunks?revision_id=` | 文書チャンク一覧（実装済み） | `document:read` |
 | GET | `/chunks/{cid}` | chunk 詳細 + 前後 | `document:read` |
 | DELETE | `/documents/{did}` | 論理削除 + 索引失効 | `document:delete` |
-| POST | `/projects/{pid}/knowledge/search` | 検索 | `knowledge:read` |
-| POST | `/projects/{pid}/knowledge/index-builds` | 索引再構築（Phase 2） | `knowledge:admin` |
+| POST | `/projects/{pid}/knowledge/search` | 検索（RRF / 任意 rerank） | `knowledge:read` |
+| GET | `/projects/{pid}/index-builds` | 索引一覧（実装済み） | `knowledge:read` |
+| POST | `/projects/{pid}/index-builds` | 索引構築（実装済み） | `provider:manage` |
+| POST | `/projects/{pid}/index-builds/{bid}:activate` | 索引の有効化（実装済み） | `provider:manage` |
 | GET | `/evidence/{eid}` | 証拠原文 + 文脈 | `knowledge:read` |
 
-> Phase 1 の実装範囲は upload-url / ローカル PUT / 登録 / 一覧 / 詳細 / content / parse / delete / search / chunks / evidence / jobs / events / audit。
-> `bulk-import`、`revisions`、`tree`、`index-builds`、`jobs: cancel` は Phase 2 以降。
+> 実装済み: upload-url / ローカル PUT / 登録 / 一覧 / 詳細 / content / parse / delete / search /
+> chunks / tree / document chunks / evidence / jobs / events / audit / bulk-import / index-builds。
+> 未実装: `revisions`（改版履歴）、`jobs: cancel`。
 
 ### 2.3 Graph / Ontology
 
+実装済みの契約（OpenAPI 正本は `contracts/api/openapi.json`）。読み取りは `SEARCH`（API 文言は
+`knowledge:read`）、Ontology 公開は `ONTOLOGY_PUBLISH`、全件再構築は `PROVIDER_MANAGE` を要求する。
+
 | メソッド | パス | 説明 | 権限 |
 |---|---|---|---|
-| POST | `/projects/{pid}/graph/query` | 実体 / 隣接 | `graph:read` |
-| GET | `/projects/{pid}/graph/entities/{eid}` | 実体詳細 + 次数 | `graph:read` |
-| POST | `/projects/{pid}/graph/paths` | 経路 | `graph:read` |
-| POST | `/projects/{pid}/graph/subgraph` | サブグラフ出力（上限 5,000） | `graph:read` |
-| GET | `/projects/{pid}/ontology` | 現行 ontology | `graph:read` |
-| POST | `/projects/{pid}/ontology/versions` | 新版公開 | `ontology:admin` + 承認 |
-| GET | `/projects/{pid}/traceability` | トレーサビリティ | `graph:read` |
+| GET | `/projects/{pid}/graph/ontology` | 現行 PUBLISHED ontology（型・関係型） | `knowledge:read` |
+| POST | `/projects/{pid}/graph/ontology/publish` | 新版公開（型を複製し、旧版を DEPRECATED） | `ontology:publish` |
+| GET | `/projects/{pid}/graph/entities?q=&entity_type=&limit=` | 実体検索 | `knowledge:read` |
+| GET | `/projects/{pid}/graph/entities/{eid}/neighbors?rel_types=&limit=` | 隣接（1 ホップ） | `knowledge:read` |
+| GET | `/projects/{pid}/graph/subgraph?root=&depth=` | サブグラフ（`depth` 1〜3、上限 500） | `knowledge:read` |
+| GET | `/projects/{pid}/graph/path?src=&dst=&max_depth=` | 最短経路（`max_depth` 1〜3） | `knowledge:read` |
+| GET | `/projects/{pid}/graph/traceability/{eid}?depth=` | 祖先 / 子孫（`depth` 1〜3） | `knowledge:read` |
+| GET | `/projects/{pid}/graph/stats` | PG / Neo4j 件数、drift_rate、最終イベント seq | `knowledge:read` |
+| POST | `/projects/{pid}/graph/rebuild` | 全件再構築（同期。in-place） | `provider:manage` |
+
+> 設計時の `POST /graph/query` / `POST /graph/paths` / `POST /graph/subgraph` / `/ontology/versions` は、
+> 実装時に上表の GET 中心の契約へ変更した。UI と OpenAPI は上表を使う。
 
 ### 2.4 Code Analysis
 
@@ -118,6 +189,22 @@
 | GET | `/code/analysis-runs/{id}` | 実行状態と統計 | `code:read` |
 | GET | `/projects/{pid}/code/symbols?fqn=` | シンボル | `code:read` |
 | GET | `/projects/{pid}/code/facts?subject=&relation=` | Fact | `code:read` |
+
+2026-11-07 の source-only 縦断実装では、上表に加えて次を実装した。
+
+- `GET /projects/{pid}/code/repositories`
+- `GET /projects/{pid}/code/revisions?repository_id=`
+- `GET /projects/{pid}/code/revisions/{rid}/files`
+- `GET /projects/{pid}/code/analysis-runs`
+- `GET /code/files/{fid}/content`（元エンコーディングのバイト列）
+
+`POST /code/revisions:sync` は `DIR` / `SNAPSHOT` / `GIT` を受け付ける。Git は
+`path` にデータディレクトリ配下のローカルパス、`file://` URL、または
+`GIT_ALLOW_REMOTE=1` を設定した閉域 remote URL を取る。branch / tag / commit SHA は
+commit SHA に解決され、同期失敗は `FAILED` ジョブとなって revision を作らない。
+`SVN` は未導入で `CAPABILITY_UNSUPPORTED` とする。`GET /code/analysis-runs/{id}` は
+project-scoped 一覧とは別に、リソースからプロジェクトを解決して返す。
+受入値と未実施項目は [`docs/phase4/acceptance.md`](../../phase4/acceptance.md) を正とする。
 
 ### 2.5 Impact
 
@@ -135,6 +222,12 @@
 | GET | `/projects/{pid}/change-inquiries` | 自分の問合せ履歴 | `impact:read` |
 | POST | `/change-inquiries/{qid}:rerun` | 同じ質問で再実行（新しい `impact_id`） | `impact:run` |
 | GET | `/change-inquiries/{qid}/report.md` | Markdown 出力（共有・チケット添付） | `impact:read` |
+| GET | `/projects/{pid}/change-inquiries/{qid}/events` | 5 セクション SSE。`Last-Event-ID` 再開 | `impact:read` |
+| GET | `/projects/{pid}/change-inquiries/{qid}/report.pdf` | PDF 出力（日本語フォント埋込） | `impact:read` |
+
+2026-11-07 の実装では、Impact / Q-01 の Markdown / PDF は
+`GET .../report.md` / `report.pdf` で同一レポートを返す。Q-01 の SSE は
+`text/event-stream` で、event id は 1 始まりの単調増加とする。
 
 ### 2.6 Test
 
@@ -272,6 +365,19 @@ data: {"impact_id":"i3d7...","stats":{"total":37,"unresolved":1},"truncated":{"h
 > 全イベントに単調増加の `id` を付け、再接続は `Last-Event-ID` で再開する。ハートビート `: ping` は 20 秒ごと。詳細は `detail/04-api-contract.md` §3.2。
 
 ### 3.3 テスト実行
+
+> **2026-11-07 の実装差分**（詳細は `docs/phase6/acceptance.md`）。
+> 下の契約は目標形であり、現時点の実装は次のとおり。
+>
+> - 端点はすべて project-scoped の `/projects/{pid}/test/*` に統一した。
+>   `rules:extract` / `plans:derive` / `overview` / `cases/{cid}/approve` /
+>   `runs` / `runs/{rid}/executions:import` / `coverage:recompute` / `defects` の 8 個。
+>   本稿の `/test-plans/{tid}` などのリソース単独パスは未実装。
+> - 入力は `case_ids` / `runner` / `retry` を持たない。対象ケースは承認済みかつ
+>   `covers` を持つものから run 側で確定する。
+> - Runner は `workers/runner/` の別プロセス。起票した run は `READY` で引き渡し、
+>   実行結果は `executions:import` に `execution_source=PLAYWRIGHT` を付けて戻す。
+> - 5 セクションの分割 SSE、成果物の保持期限 / 容量上限は未実装。
 
 ```http
 POST /api/v1/projects/8f2c.../test-runs

@@ -43,13 +43,15 @@ RUN touch crates/*/src/lib.rs crates/*/src/main.rs \
 FROM debian:bookworm-slim
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates \
- && rm -rf /var/lib/apt/lists/* \
- && useradd --create-home --uid 10001 systivra
+ && apt-get install -y --no-install-recommends fonts-noto-cjk \
+ && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /src/target/release/systivra-api    /usr/local/bin/systivra-api
 COPY --from=builder /src/target/release/systivra-worker /usr/local/bin/systivra-worker
 
-USER systivra
+RUN mkdir -p /data && chmod 0777 /data
+VOLUME /data
+
+USER 10001:10001
 EXPOSE 8080
 ENTRYPOINT ["systivra-api"]

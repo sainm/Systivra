@@ -42,6 +42,9 @@
 |---|---|---|---|
 | `VALIDATION_SCHEMA` | 400 | 不可 | 入力型・列挙値の誤り |
 | `AUTH_TOKEN_EXPIRED` | 401 | 不可 | 再ログイン要求 |
+| `AUTH_SSO_UNAVAILABLE` | 503 | 可 | OIDC 未設定または IdP 停止（Phase 8） |
+| `AUTH_RATE_LIMITED` | 429 | 可（`Retry-After`） | 認証エンドポイントの連続要求（Phase 8） |
+| `AUTH_LOGOUT_TOKEN_INVALID` | 400 | 不可 | OIDC logout token の不正・リプレイ（Phase 8） |
 | `FORBIDDEN_PROJECT_SCOPE` | 403 | 不可 | プロジェクト範囲外 |
 | `NOT_FOUND_*` | 404 | 不可 | リソース不存在 |
 | `CONFLICT_REVISION_SUPERSEDED` | 409 | 不可 | 改版の競合 |
@@ -92,7 +95,7 @@ TEST_SPEC / API_SPEC / MANUAL / OTHER
 ## 1. Document
 
 > **Phase 1 実装範囲（2026-11-06）**: §1.1 / §1.1.1 / §1.2 / §1.4 / §1.6 / §1.7、§2.1〜§2.3、§3.1〜§3.3。
-> §1.3（bulk-import）と §1.5（構造木）は Phase 2。
+> §1.3（bulk-import）、§1.5（構造木）、§1.8（文書チャンク一覧）は Phase 2 で実装済み。
 
 ### 1.1 アップロード URL 発行
 
@@ -125,14 +128,15 @@ Idempotency-Key: upload:user_edit.xlsx:18422
 ### 1.1.1 ローカル原本 PUT（Phase 1 追加）
 
 Phase 1 の `upload_url` は S3 presigned URL ではなく、API が発行する署名付きローカル URL になる。
-返された URL に PDF のバイト列を `PUT` する。
+返された URL に PDF / XLSX / XLSM / DOCX / PPTX のバイト列を `PUT` する。
 
 ```http
 PUT /api/v1/uploads/{token}
-Content-Type: application/pdf
+Content-Type: application/octet-stream
 ```
 
-- `token` は 1.1 の署名情報。改竄・期限切れは 401、空・PDF でない・サイズ超過は 400。
+- `token` は 1.1 の署名情報。改竄・期限切れは 401、空・未対応形式・サイズ超過は 400。
+- 対応署名は PDF の `%PDF-` と OOXML の ZIP（`PK\x03\x04` / `PK\x05\x06`）。
 - 成功は 204。DB には document を書かない。
 - 本番は S3 presigned URL に置き換えるが、`upload_url` / `object_key` の契約は変えない。
 
@@ -177,9 +181,9 @@ POST /api/v1/projects/{pid}/documents
 
 **errors**：`CONFLICT_ALREADY_IMPORTED`（同一 `content_hash`）、`VALIDATION_SCHEMA`（`doc_type`）。
 
-### 1.3 一括取込（Phase 2）
+### 1.3 一括取込（Phase 2 実装済み）
 
-> Phase 1 では未実装。`08-実装計画.md` の大規模取込（マニフェスト、部分成功、再開）で追加する。
+`manifest_url` は `SYSTIVRA_DATA_DIR` 配下のパス（`file://` 可）。マニフェストは JSONL で、`path` はマニフェストからの相対パス。部分成功・失敗一覧・チェックポイント再開に対応する。Phase 2 のマニフェストはローカル FS のみ（S3 は未対応）。
 
 ```http
 POST /api/v1/projects/{pid}/documents:bulk-import
@@ -218,8 +222,9 @@ GET /api/v1/projects/{pid}/documents
   &q=住所
   &limit=50
   &cursor=eyJvIjoxMDAwfQ
-  &include=summary
 ```
+
+`include` は Phase 2（Phase 1 は常にサマリ）。
 
 ```json
 200
@@ -242,11 +247,11 @@ GET /api/v1/projects/{pid}/documents
 }
 ```
 
-**速度**：`include=summary` は `sheet_count` / `chunk_count` / `parse_status` のみ。`include=detail` を指定した場合のみ数式・領域数を返す。60,000 件の全フィールドを返さない。
+**速度**：Phase 1 は常にサマリ（`sheet_count` / `chunk_count` / `parse_status`）を返し、`include=detail` の投影は Phase 2。60,000 件の全フィールドを返さない。
 
-### 1.5 構造木（遅延読み込み、Phase 2）
+### 1.5 構造木（遅延読み込み、Phase 2 実装済み）
 
-> Phase 1 では未実装。画面は PDF ビューアとページ位置で代替している。
+> `GET /api/v1/documents/{did}/tree`。`parent=ROOT` は DOCUMENT ノードの子を返す。未指定も ROOT と同じ。
 
 ```http
 GET /api/v1/documents/{did}/tree?revision_id=r9c3...&parent=ROOT&limit=100
@@ -272,7 +277,7 @@ GET /api/v1/documents/{did}/tree?revision_id=r9c3...&parent=ROOT&limit=100
 GET /api/v1/documents/{did}/content
 ```
 
-PDF 原本のバイト列を `Content-Type: application/pdf` で返す。認可は `document:read`。
+原本のバイト列を保存時の MIME で返す。認可は `document:read`。
 Phase 1 のビューアが `locator.page` を開くために使う。原本の保存先は Provider の実装
 （Phase 1 はローカルファイル、本番は S3）であり、この契約は保存方式に依存しない。
 
@@ -294,6 +299,32 @@ POST /api/v1/documents/{did}/revisions/{rid}:parse
 重複送信は `Idempotency-Key` を使えば同じ `job_id` を返す。
 
 ---
+
+### 1.8 文書チャンク一覧（Phase 2 追加）
+
+```http
+GET /api/v1/documents/{did}/chunks?revision_id=r9c3...&limit=50&cursor=eyJvIjo1MH0
+```
+
+```json
+200
+{
+  "items": [
+    {
+      "id": "c4b1...",
+      "chunk_type": "SHEET_REGION",
+      "ordinal": 0,
+      "text": "【画面項目定義 / A1:C14】...",
+      "locator": {"kind": "xlsx", "sheet": "画面項目定義", "range": "A3:C14"},
+      "token_count": 210
+    }
+  ],
+  "next_cursor": "eyJvIjo1MH0",
+  "has_more": true
+}
+```
+
+`revision_id` 省略時は current revision。Chunk Explorer が使う。
 
 ## 2. Knowledge
 
@@ -347,7 +378,7 @@ POST /api/v1/projects/{pid}/knowledge/search
 
 **速度**：`include` に `quote` を含めない場合、`quote` は空で返す（呼び出し側で 2.3 に取りに行く）。1,200 万 chunk 規模で `latency_ms` P95 は **受入上限 2.0s / 目標 1.2s**（`detail/03-performance.md` §1）。内部では 32〜64 分区へ並列 fan-out するが、これはクライアントに見せない。
 
-**errors**：`CAPABILITY_UNSUPPORTED`（`rerank=true` で rerank なし）、`VALIDATION_SCHEMA`（`top_k > 100`）。
+**errors**：`VALIDATION_SCHEMA`（`top_k > 100`、`lexical` モードでの `rerank`）。`rerank=true` はローカル語彙一致による簡易リランクで、`degraded` に `rerank_local_heuristic` を追加する。融合は RRF（`score = Σ 1/(60 + rank_i)`）。
 
 ### 2.2 チャンク取得
 
@@ -397,10 +428,50 @@ GET /api/v1/evidence/{eid}
 ```
 
 **約束**：`quote` は原文の完全な部分文字列。サーバーが検証し、一致しなければ 500 を返さずに `EVIDENCE_QUOTE_MISMATCH`（500 系ではなく 422）を返す。
+Phase 1 は chunk 生成時に部分文字列を保証し、外部から `quote` を受け取る API と 422 応答は Phase 2。
 
 **表現規約**：DB の `quote_hash` は `bytea`（`sha256(NFC(quote))`）。JSON では **`sha256:` を付けた lowercase hex 64 文字**で返す。元のバイト列でも、NFKC 正規化後でもない（`05-データモデル.md` J-03）。`locator` の `sheet` / `range` は原文のまま、`quote` は NFC で保持する。
 
 ---
+
+### 2.4 索引管理（Phase 2 追加）
+
+```http
+GET /api/v1/projects/{pid}/index-builds
+```
+
+```json
+200
+{
+  "items": [
+    {
+      "id": "b1...", "model_id": "m1...", "model_name": "local-hash-1024-v2",
+      "revision": "2", "status": "READY", "chunk_count": 109,
+      "started_at": "2026-11-06T15:35:58Z", "finished_at": "2026-11-06T15:36:00Z",
+      "is_active": false
+    }
+  ]
+}
+```
+
+```http
+POST /api/v1/projects/{pid}/index-builds
+{"model": "local-hash-1024-v2"}
+```
+
+```json
+202
+{"build": {"id": "b1...", "status": "BUILDING", "...": "..."},
+ "job_id": "j1...", "links": {"events": "/api/v1/jobs/j1.../events"}}
+```
+
+```http
+POST /api/v1/projects/{pid}/index-builds/{bid}:activate
+```
+
+- `status` は `BUILDING` / `READY` / `FAILED`。`READY` の索引だけを有効化できる。
+- 有効化しても旧索引は `READY` のまま残り、再切替できる。`is_active` はプロジェクトごとに 1 件。
+- 検索は有効な `index_build.model_id` の埋め込みを使う。有効な build が無い場合は `local-hash-1024`（rev 1）へフォールバックする。
 
 ## 3. Job とイベント
 
@@ -603,6 +674,14 @@ GET /api/v1/impacts/{iid}/items?level=L2&resolution=INFERRED&limit=50&cursor=...
 
 **セクションの必須フィールド**：`items[].why`（なぜ影響するか 1 文）と `quote` + `locator` + `evidence_id`。証拠のない項目は主表に入れず、`unverified` に分ける。
 
+2026-11-07 実装差分：
+
+- `input` に `base_revision_id` / `head_revision_id` / `paths` / `diff_unified` を持つ。
+  `diff_unified` は Git 標準 hunk の変更行を seed に使う。
+- `/events` は `text/event-stream`。event id は 1 始まり、`Last-Event-ID` で再開する。
+- `report.md`（Impact / Q-01）と `report.pdf` を返す。PDF は日本語フォントを
+  サブセット埋め込みし、帳票内容は API の report と同じ値から生成する。
+
 > 完全な契約・4 分類の投影規則・降格・受入 14 ケースは `detail/08-change-inquiry.md`。
 
 ---
@@ -736,9 +815,9 @@ PATCH /api/v1/providers/{id}
 
 | 項目 | 候補 |
 |---|---|
-| カーソル符号化 | base64(JSON `{"o":<offset>,"k":[...]}`) |
+| カーソル符号化 | base64(JSON `{"t":<created_at>,"id":<uuid>}`) |
 | `latency_ms` の定義 | サーバー側処理時間（キュー待ちを除く） |
-| `degraded` の値 | `rerank_unavailable` / `graph_assist_off` / `partial_index` |
+| `degraded` の値 | Phase 2: `embedding_local_fallback` / `bbox_unavailable` / `graph_assist_off` / `rerank_local_heuristic`。pg_bigm 不在は全文検索の内部フォールバック（bigram）として扱い、応答には出さない |
 | 429 の `Retry-After` | 秒。上流 429 をそのまま転送しない |
 
 ---
@@ -751,4 +830,4 @@ PATCH /api/v1/providers/{id}
 - [ ] 3.2 は `Last-Event-ID` で再開できる
 - [ ] 4.1 / 5.1 は 202 で返し、完了はイベントで知らせる
 - [ ] 全エンドポイントで 404 と 403 を混同しない
-- [ ] `quote` の部分文字列検証が 2.3 で動く
+- [ ] `quote` の部分文字列検証が 2.3 で動く（Phase 1 は生成時、Phase 2 は外部入力）

@@ -45,7 +45,9 @@ impl SourceKind {
 /// **`Ord` は「強い順」ではない。** 表示順と並べ替えのために付けているだけで、
 /// 権限判定には使わない。`TESTER` と `DEVELOPER` に優劣は無い（互いに
 /// 書ける領域が違う）。可否は必ず [`Permission`](crate::Permission) の表で決める。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, utoipa::ToSchema,
+)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Role {
     Viewer,

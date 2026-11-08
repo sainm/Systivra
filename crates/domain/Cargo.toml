@@ -11,3 +11,4 @@ serde.workspace = true
 uuid.workspace = true
 thiserror.workspace = true
 chrono.workspace = true
+utoipa = { version = "5.5.0", features = ["uuid"] }

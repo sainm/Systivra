@@ -12,7 +12,13 @@
 #![forbid(unsafe_code)]
 
 pub mod a1;
+pub mod ingest;
 pub mod ooxml;
+pub mod region;
+pub mod values;
 
 pub use a1::CellRef;
-pub use ooxml::{open, Figure, FigureKind, MergedRegion, Sheet, Workbook, XlsxError};
+pub use ingest::{read as read_xlsx, IngestError, XlsxIngest, XlsxPage};
+pub use ooxml::{open, Figure, FigureKind, MergedRegion, Sheet, Visibility, Workbook, XlsxError};
+pub use region::{detect_regions, plan_sheet, Region, SheetPlan, XlsxChunk};
+pub use values::{Cell, CellValue, DefinedName, Formula, SheetCells, StyleInfo, Styles};

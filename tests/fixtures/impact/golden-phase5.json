@@ -1,0 +1,223 @@
+{
+  "description": "Phase 5 source-only SAMPLE. Depth 1 is used so each expected item is directly justified by a source relation.",
+  "project_code": "PRJ-DEMO",
+  "min_recall": 0.9,
+  "min_precision": 0.7,
+  "changes": [
+    {
+      "id": "G01",
+      "kind": "ENTITY",
+      "seed": {"kind": "Method", "natural_key": "jp.example.action.UserEditAction.update()"},
+      "expected": [
+        {"kind": "Method", "natural_key": "jp.example.action.UserEditAction.update()"},
+        {"kind": "Class", "natural_key": "jp.example.action.UserEditAction"},
+        {"kind": "Field", "natural_key": "jp.example.action.UserEditAction.userService"},
+        {"kind": "Method", "natural_key": "jp.example.service.UserService.save(UserDto)"}
+      ],
+      "rationale": "update は自身の field を読み、UserService.save を呼ぶ。"
+    },
+    {
+      "id": "G02",
+      "kind": "ENTITY",
+      "seed": {"kind": "Method", "natural_key": "jp.example.service.UserService.save(UserDto)"},
+      "expected": [
+        {"kind": "Method", "natural_key": "jp.example.service.UserService.save(UserDto)"},
+        {"kind": "Class", "natural_key": "jp.example.service.UserService"},
+        {"kind": "Method", "natural_key": "jp.example.service.UserService.update(UserDto)"},
+        {"kind": "Method", "natural_key": "jp.example.action.UserEditAction.update()"}
+      ],
+      "rationale": "save は update を呼び、UserEditAction.update から呼ばれる。"
+    },
+    {
+      "id": "G03",
+      "kind": "ENTITY",
+      "seed": {"kind": "Method", "natural_key": "jp.example.service.UserService.update(UserDto)"},
+      "expected": [
+        {"kind": "Method", "natural_key": "jp.example.service.UserService.update(UserDto)"},
+        {"kind": "Class", "natural_key": "jp.example.service.UserService"},
+        {"kind": "Field", "natural_key": "jp.example.service.UserService.addressService"},
+        {"kind": "Method", "natural_key": "jp.example.service.AddressService.validate(String)"}
+      ],
+      "rationale": "update は addressService を読み、AddressService.validate を呼ぶ。"
+    },
+    {
+      "id": "G04",
+      "kind": "ENTITY",
+      "seed": {"kind": "Field", "natural_key": "jp.example.action.UserEditAction.userService"},
+      "expected": [
+        {"kind": "Field", "natural_key": "jp.example.action.UserEditAction.userService"},
+        {"kind": "Class", "natural_key": "jp.example.action.UserEditAction"},
+        {"kind": "Method", "natural_key": "jp.example.action.UserEditAction.update()"}
+      ],
+      "rationale": "userService は UserEditAction.update から読まれる。"
+    },
+    {
+      "id": "G05",
+      "kind": "ENTITY",
+      "seed": {"kind": "Field", "natural_key": "jp.example.service.UserService.addressService"},
+      "expected": [
+        {"kind": "Field", "natural_key": "jp.example.service.UserService.addressService"},
+        {"kind": "Class", "natural_key": "jp.example.service.UserService"},
+        {"kind": "Method", "natural_key": "jp.example.service.UserService.update(UserDto)"}
+      ],
+      "rationale": "addressService は UserService.update から読まれる。"
+    },
+    {
+      "id": "G06",
+      "kind": "ENTITY",
+      "seed": {"kind": "Field", "natural_key": "jp.example.action.UserForm.address"},
+      "expected": [
+        {"kind": "Field", "natural_key": "jp.example.action.UserForm.address"},
+        {"kind": "Class", "natural_key": "jp.example.action.UserForm"},
+        {"kind": "Method", "natural_key": "jp.example.action.UserForm.getAddress()"}
+      ],
+      "rationale": "address は getAddress から読まれる。"
+    },
+    {
+      "id": "G07",
+      "kind": "ENTITY",
+      "seed": {"kind": "Method", "natural_key": "jp.example.action.UserForm.getAddress()"},
+      "expected": [
+        {"kind": "Method", "natural_key": "jp.example.action.UserForm.getAddress()"},
+        {"kind": "Class", "natural_key": "jp.example.action.UserForm"},
+        {"kind": "Field", "natural_key": "jp.example.action.UserForm.address"}
+      ],
+      "rationale": "getAddress は address field を読む。"
+    },
+    {
+      "id": "G08",
+      "kind": "ENTITY",
+      "seed": {"kind": "Class", "natural_key": "jp.example.action.UserEditAction"},
+      "expected": [
+        {"kind": "Class", "natural_key": "jp.example.action.UserEditAction"},
+        {"kind": "Field", "natural_key": "jp.example.action.UserEditAction.userService"},
+        {"kind": "Method", "natural_key": "jp.example.action.UserEditAction.update()"}
+      ],
+      "rationale": "クラスは所有する field と method を宣言する。"
+    },
+    {
+      "id": "G09",
+      "kind": "ENTITY",
+      "seed": {"kind": "Class", "natural_key": "jp.example.service.UserService"},
+      "expected": [
+        {"kind": "Class", "natural_key": "jp.example.service.UserService"},
+        {"kind": "Field", "natural_key": "jp.example.service.UserService.addressService"},
+        {"kind": "Method", "natural_key": "jp.example.service.UserService.save(UserDto)"},
+        {"kind": "Method", "natural_key": "jp.example.service.UserService.update(UserDto)"}
+      ],
+      "rationale": "UserService は field と 2 method を宣言する。"
+    },
+    {
+      "id": "G10",
+      "kind": "ENTITY",
+      "seed": {"kind": "Class", "natural_key": "jp.example.service.AddressService"},
+      "expected": [
+        {"kind": "Class", "natural_key": "jp.example.service.AddressService"},
+        {"kind": "Method", "natural_key": "jp.example.service.AddressService.validate(String)"}
+      ],
+      "rationale": "AddressService は validate を宣言する。"
+    },
+    {
+      "id": "G11",
+      "kind": "ENTITY",
+      "seed": {"kind": "Method", "natural_key": "jp.example.service.AddressService.validate(String)"},
+      "expected": [
+        {"kind": "Method", "natural_key": "jp.example.service.AddressService.validate(String)"},
+        {"kind": "Class", "natural_key": "jp.example.service.AddressService"},
+        {"kind": "Method", "natural_key": "jp.example.service.UserService.update(UserDto)"}
+      ],
+      "rationale": "validate は UserService.update から呼ばれる。"
+    },
+    {
+      "id": "G12",
+      "kind": "ENTITY",
+      "seed": {"kind": "Module", "natural_key": "src/main/java/jp/example/action/UserEditAction.java"},
+      "expected": [
+        {"kind": "Module", "natural_key": "src/main/java/jp/example/action/UserEditAction.java"},
+        {"kind": "Class", "natural_key": "jp.example.action.UserEditAction"}
+      ],
+      "rationale": "Module は Java クラスを宣言する。"
+    },
+    {
+      "id": "G13",
+      "kind": "ENTITY",
+      "seed": {"kind": "Module", "natural_key": "src/main/java/jp/example/service/UserService.java"},
+      "expected": [
+        {"kind": "Module", "natural_key": "src/main/java/jp/example/service/UserService.java"},
+        {"kind": "Class", "natural_key": "jp.example.service.UserService"}
+      ],
+      "rationale": "Module は UserService を宣言する。"
+    },
+    {
+      "id": "G14",
+      "kind": "ENTITY",
+      "seed": {"kind": "Configuration", "natural_key": "src/main/webapp/WEB-INF/struts-config.xml"},
+      "expected": [
+        {"kind": "Configuration", "natural_key": "src/main/webapp/WEB-INF/struts-config.xml"},
+        {"kind": "Screen", "natural_key": "/WEB-INF/jsp/userEdit.jsp"}
+      ],
+      "rationale": "Struts forward は /WEB-INF/jsp/userEdit.jsp を表示する。"
+    },
+    {
+      "id": "G15",
+      "kind": "ENTITY",
+      "seed": {"kind": "Screen", "natural_key": "/userEdit"},
+      "expected": [
+        {"kind": "Screen", "natural_key": "/userEdit"},
+        {"kind": "Action", "natural_key": "jp.example.action.UserEditAction"},
+        {"kind": "Screen", "natural_key": "Jsp:src/main/webapp/userEdit.jsp"}
+      ],
+      "rationale": "UserEditAction が /userEdit を処理し、JSP form が送信する。"
+    },
+    {
+      "id": "G16",
+      "kind": "ENTITY",
+      "seed": {"kind": "Screen", "natural_key": "Jsp:src/main/webapp/userEdit.jsp"},
+      "expected": [
+        {"kind": "Screen", "natural_key": "Jsp:src/main/webapp/userEdit.jsp"},
+        {"kind": "Screen", "natural_key": "/userEdit"}
+      ],
+      "rationale": "JSP form は /userEdit へ送信する。"
+    },
+    {
+      "id": "G17",
+      "kind": "ENTITY",
+      "seed": {"kind": "Class", "natural_key": "jp.example.service.LegacyNameService"},
+      "expected": [
+        {"kind": "Class", "natural_key": "jp.example.service.LegacyNameService"},
+        {"kind": "Method", "natural_key": "jp.example.service.LegacyNameService.normalize()"}
+      ],
+      "rationale": "LegacyNameService は normalize を宣言する。"
+    },
+    {
+      "id": "G18",
+      "kind": "ENTITY",
+      "seed": {"kind": "Method", "natural_key": "jp.example.reflection.ReflectiveGateway.load000()"},
+      "expected": [
+        {"kind": "Method", "natural_key": "jp.example.reflection.ReflectiveGateway.load000()"},
+        {"kind": "Class", "natural_key": "jp.example.reflection.ReflectiveGateway"}
+      ],
+      "rationale": "reflection は方法の宣言関係だけを確定し、対象クラスを RESOLVED にしない。"
+    },
+    {
+      "id": "G19",
+      "kind": "ENTITY",
+      "seed": {"kind": "Component", "natural_key": "jp.example.mapper.UserMapper"},
+      "expected": [
+        {"kind": "Component", "natural_key": "jp.example.mapper.UserMapper"},
+        {"kind": "Table", "natural_key": "app_user"}
+      ],
+      "rationale": "MyBatis mapper は app_user を問い合わせる。"
+    },
+    {
+      "id": "G20",
+      "kind": "ENTITY",
+      "seed": {"kind": "Method", "natural_key": "jp.example.service.LegacyNameService.normalize()"},
+      "expected": [
+        {"kind": "Method", "natural_key": "jp.example.service.LegacyNameService.normalize()"},
+        {"kind": "Class", "natural_key": "jp.example.service.LegacyNameService"}
+      ],
+      "rationale": "normalize は LegacyNameService に宣言される。"
+    }
+  ]
+}

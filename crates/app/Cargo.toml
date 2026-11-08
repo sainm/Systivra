@@ -18,3 +18,17 @@ uuid.workspace = true
 argon2.workspace = true
 sha2.workspace = true
 chrono.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+engine-rag.workspace = true
+engine-graph.workspace = true
+engine-code.workspace = true
+engine-impact.workspace = true
+engine-test.workspace = true
+providers.workspace = true
+printpdf.workspace = true
+reqwest.workspace = true
+
+[dev-dependencies]
+pdf-extract = "0.12.1"

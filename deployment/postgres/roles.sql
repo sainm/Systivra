@@ -3,7 +3,7 @@
 -- **マイグレーションの後に流す。** 先に流すと schema が無く、USAGE を付与できず
 -- 「permission denied for schema core」で全 API が 500 になる。
 -- 冪等なので、マイグレーション追加のたびに再実行してよい。
--- 存在する schema / 表にだけ適用する（kb / code / graph_meta / test / ai / ops は
+-- 存在する schema / 表にだけ適用する（corpus / code / graph_meta / test / ai / ops は
 -- Phase 2 以降に増えるため）。
 
 \set ON_ERROR_STOP on
@@ -35,7 +35,7 @@ DO $$
 DECLARE
   s text;
 BEGIN
-  FOREACH s IN ARRAY ARRAY['core','kb','code','graph_meta','test','ai','ops'] LOOP
+  FOREACH s IN ARRAY ARRAY['core','corpus','code','graph_meta','impact','test','ai','ops'] LOOP
     CONTINUE WHEN to_regnamespace(s) IS NULL;
 
     EXECUTE format('GRANT USAGE ON SCHEMA %I TO systivra_app, systivra_worker, systivra_scheduler', s);
@@ -53,6 +53,36 @@ BEGIN
 END
 $$;
 
+-- impact は API が Draft を起票し、worker が結果を書く。
+DO $$
+BEGIN
+  IF to_regnamespace('impact') IS NOT NULL THEN
+    EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA impact TO systivra_worker, systivra_scheduler';
+    EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA impact GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO systivra_worker, systivra_scheduler';
+  END IF;
+END
+$$;
+
+-- test も impact と同じく API が起票し、worker が run / execution を更新する。
+DO $$
+BEGIN
+  IF to_regnamespace('test') IS NOT NULL THEN
+    EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA test TO systivra_worker, systivra_scheduler';
+    EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA test GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO systivra_worker, systivra_scheduler';
+  END IF;
+END
+$$;
+
+-- ai は API が起票し、worker が run / step / node_run を更新する。
+DO $$
+BEGIN
+  IF to_regnamespace('ai') IS NOT NULL THEN
+    EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ai TO systivra_worker, systivra_scheduler';
+    EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA ai GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO systivra_worker, systivra_scheduler';
+  END IF;
+END
+$$;
+
 -- ─────────────────────────────────────────────────────────────
 -- 3. 役割ごとの調整
 -- ─────────────────────────────────────────────────────────────
@@ -63,10 +93,10 @@ BEGIN
   IF to_regclass('core.job') IS NOT NULL THEN
     REVOKE UPDATE ON core.job FROM systivra_app;
 
-    GRANT SELECT ON core.job TO systivra_worker, systivra_scheduler;
-    GRANT UPDATE ON core.job TO systivra_worker, systivra_scheduler;
+    GRANT SELECT, INSERT, UPDATE ON core.job TO systivra_worker, systivra_scheduler;
     GRANT SELECT, INSERT, UPDATE ON core.job_checkpoint,
-          core.outbox_event, core.outbox_dead_letter TO systivra_worker;
+          core.outbox_event, core.outbox_dead_letter TO systivra_worker, systivra_scheduler;
+    GRANT SELECT, INSERT ON core.outbox_event TO systivra_app;
   END IF;
 END
 $$;
@@ -76,6 +106,76 @@ DO $$
 BEGIN
   IF to_regclass('core.audit_log') IS NOT NULL THEN
     EXECUTE 'REVOKE UPDATE, DELETE, TRUNCATE ON core.audit_log FROM systivra_app, systivra_worker, systivra_scheduler';
+  END IF;
+END
+$$;
+
+-- corpus は worker も書く（解析結果・chunk・embedding・証拠）。
+DO $$
+BEGIN
+  IF to_regnamespace('corpus') IS NOT NULL THEN
+    EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA corpus TO systivra_worker, systivra_scheduler';
+    EXECUTE 'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA corpus TO systivra_worker, systivra_scheduler';
+    EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA corpus GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO systivra_worker, systivra_scheduler';
+  END IF;
+END
+$$;
+
+-- graph_meta は worker / scheduler も投影と再構築で書く。
+DO $$
+BEGIN
+  IF to_regnamespace('graph_meta') IS NOT NULL THEN
+    EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA graph_meta TO systivra_worker, systivra_scheduler';
+    EXECUTE 'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA graph_meta TO systivra_worker, systivra_scheduler';
+    EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA graph_meta GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO systivra_worker, systivra_scheduler';
+  END IF;
+END
+$$;
+
+-- code の内容表と分析表を worker / scheduler が書く。API はユースケースから
+-- repository / analysis_run の投入だけを行い、Fact の唯一の書き手は worker。
+DO $$
+BEGIN
+  IF to_regnamespace('code') IS NOT NULL THEN
+    EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA code TO systivra_worker, systivra_scheduler';
+    EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA code GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO systivra_worker, systivra_scheduler';
+  END IF;
+END
+$$;
+
+-- 008/009 で作る関数。マイグレーション時点ではロールが無いため、ここで付与する。
+DO $$
+BEGIN
+  IF to_regprocedure('core.project_of(text, uuid)') IS NOT NULL THEN
+    GRANT EXECUTE ON FUNCTION core.project_of(text, uuid)
+      TO systivra_app, systivra_worker, systivra_scheduler;
+  END IF;
+END
+$$;
+
+-- 監査の追記とジョブイベント。
+DO $$
+BEGIN
+  IF to_regclass('core.audit_log') IS NOT NULL THEN
+    GRANT INSERT ON core.audit_log TO systivra_worker, systivra_scheduler;
+    GRANT USAGE, SELECT ON SEQUENCE core.audit_log_id_seq TO systivra_worker, systivra_scheduler;
+  END IF;
+
+  IF to_regclass('core.job_event') IS NOT NULL THEN
+    GRANT SELECT, INSERT ON core.job_event TO systivra_app;
+    GRANT SELECT, INSERT ON core.job_event TO systivra_worker, systivra_scheduler;
+    GRANT USAGE, SELECT ON SEQUENCE core.job_event_id_seq
+      TO systivra_app, systivra_worker, systivra_scheduler;
+  END IF;
+END
+$$;
+
+-- worker は job を起動した人間のロールを引いてから能力を実行する
+-- （Agent が人間の権限を超えないための確認）。**読み取りのみ**。
+DO $$
+BEGIN
+  IF to_regclass('core.project_member') IS NOT NULL THEN
+    GRANT SELECT ON core.project_member TO systivra_worker, systivra_scheduler;
   END IF;
 END
 $$;

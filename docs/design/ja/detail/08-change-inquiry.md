@@ -14,6 +14,21 @@
 
 > **本稿の最重要判断**：これは**新しい影響分析エンジンを作らない**。`04-コアエンジン.md` §4.5 の ImpactEngine に **`profile = CHANGE_INQUIRY`** を渡し、得られた `ImpactReport` を 4 分類へ投影したもの。追加するのは「入力の正規化」「分類投影」「テスト提案の編成」だけ。第二の影響ロジックを作ると、A-04 と Q-01 で答えが食い違う。
 
+> **実装境界（2026-11-07）**：本稿の処理は既存の source-only Fact、PG グラフ、
+> 文書 evidence を使う。OpenRewrite、`javac`、顧客 classpath、顧客案件固有の
+> 意味的正解は取得・実行せず、受入 PASS に含めない。外部型・動的挙動は既存 Fact の
+> `INFERRED / UNRESOLVED` と `degraded` を維持し、`RESOLVED` に昇格させない。
+
+実装上の seed / 配信:
+
+- Git unified diff の `@@` 行範囲を受け取り、変更後の行を含む最小 Symbol を seed にする。
+  diff 入力が無い場合は base/head 原文の決定的 LCS から同じ行範囲を作る。
+- Java 解析の `READS / WRITES` Fact により、変更 Field から読み書き Method へ閉包する。
+  `CALLS` は双方向に辿るため、呼び出し元（逆依存）へ到達する。
+- Impact worker は全 `graph_meta` をロードせず、DB の frontier を 1〜6 層だけ取得する。
+- Q-01 `/events` は `text/event-stream`。イベント id は 1 始まりの単調増加で、
+  `Last-Event-ID` より後のイベントだけを再送する。
+
 ---
 
 ## 1. 位置づけと正本
@@ -255,6 +270,7 @@ GET /api/v1/change-inquiries/{qid}?include=screens,documents,code,tests&cursor=<
 | GET | `/projects/{pid}/change-inquiries?cursor=&limit=` | 自分の問合せ履歴（質問・状態・件数サマリ） |
 | POST | `/change-inquiries/{qid}:rerun` | 同じ `question` と `input` で再実行。`impact_id` は新規 |
 | GET | `/change-inquiries/{qid}/report.md` | Markdown 出力（共有・チケット添付用） |
+| GET | `/change-inquiries/{qid}/report.pdf` | PDF 出力。日本語フォントをサブセット埋め込み |
 
 `rerun` は**監査に残す**。設計書やコードが更新された後に同じ質問を投げ直し、差分を比較できるようにする。
 
@@ -488,7 +504,7 @@ Q-01「テスト計画に入れる」→ 202 + {plan_id}
 | # | 失敗 | 検知 | 挙動 | 表示 |
 |---|---|---|---|---|
 | D-01 | グラフが落ちている | 接続失敗 | PG の `graph_meta` だけで 1 ホップに降格 | `degraded:["graph_unavailable"]`、`truncated.depth=true` |
-| D-02 | 文書が未索引 | `kb.chunk` 0 件 | documents を空にし、理由を出す | `degraded:["documents_not_indexed"]` |
+| D-02 | 文書が未索引 | `corpus.chunk` 0 件 | documents を空にし、理由を出す | `degraded:["documents_not_indexed"]` |
 | D-03 | コード未解析 | `code.fact` 0 件 | code を空にし、理由を出す | `degraded:["code_not_analyzed"]` |
 | D-04 | テスト資産なし | `test_case` 0 件 | tests は手順だけ | `degraded:["tests_not_available"]` |
 | D-05 | rerank 不調 | 429 / timeout | RRF のみ | `degraded:["rerank_unavailable"]` |

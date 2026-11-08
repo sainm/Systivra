@@ -5,10 +5,11 @@
 
 use argon2::password_hash::{PasswordHash, PasswordVerifier};
 use argon2::Argon2;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use contracts::MembershipSummary;
 use domain::{ProjectId, Role, UserId};
 use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 use crate::App;
 
@@ -19,6 +20,8 @@ pub struct Authenticated {
     pub user_id: UserId,
     pub display_name: String,
     pub via: Credential,
+    /// Cookie セッションの ID。PAT は `None`。
+    pub session_id: Option<Uuid>,
 }
 
 /// 認証手段。監査ログの `actor_type` とは別物（どちらも `USER`）。
@@ -26,6 +29,34 @@ pub struct Authenticated {
 pub enum Credential {
     Session,
     Token,
+}
+
+impl Authenticated {
+    /// worker（job）から能力を実行するときの身元。
+    ///
+    /// 起点は**その job を作った人間**であり、Agent でもシステムでもない。
+    /// セッションは既に閉じているので `session_id` は無い。監査の `actor_type` は
+    /// 呼び出し側が `SYSTEM` として書く（`agent_run.requested_by` に人間が残る）。
+    pub fn for_job(user_id: UserId) -> Self {
+        Self {
+            user_id,
+            display_name: String::new(),
+            via: Credential::Session,
+            session_id: None,
+        }
+    }
+}
+
+/// ログイン監査の入力。引数を増やさず、失敗理由を必ず残す。
+pub struct AuthAudit<'a> {
+    pub project: Option<ProjectId>,
+    pub actor: Option<UserId>,
+    pub action: &'a str,
+    pub result: &'a str,
+    pub provider: &'a str,
+    pub subject: Option<&'a str>,
+    pub reason: Option<&'a str>,
+    pub trace_id: Option<&'a str>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -73,29 +104,142 @@ impl App {
             user_id: user.id,
             display_name: user.display_name,
             via: Credential::Session,
+            session_id: None,
         }))
     }
 
-    /// セッション Cookie の `user_id` から身元を組み立てる。
+    /// セッションを発行し、DB に実体を残す。
+    pub async fn create_session(
+        &self,
+        user: UserId,
+        expires_at: DateTime<Utc>,
+        ip_hash: Option<&[u8]>,
+        user_agent: Option<&str>,
+        identity: &store::SessionIdentity<'_>,
+    ) -> Result<Uuid, AuthError> {
+        let id = Uuid::new_v4();
+        let mut tx = self.store().begin_unscoped().await?;
+        self.store()
+            .insert_session(
+                &mut tx,
+                &store::NewSession {
+                    id,
+                    user,
+                    expires_at,
+                    ip_hash,
+                    user_agent,
+                    identity: *identity,
+                },
+            )
+            .await?;
+        store::commit(tx).await?;
+        Ok(id)
+    }
+
+    /// 現在のセッションを失効させる。冪等。
+    pub async fn revoke_session(&self, session: Uuid) -> Result<(), AuthError> {
+        let mut tx = self.store().begin_unscoped().await?;
+        self.store().revoke_session(&mut tx, session).await?;
+        store::commit(tx).await?;
+        Ok(())
+    }
+
+    /// 自分の有効なセッション一覧。
+    pub async fn list_sessions(&self, user: UserId) -> Result<Vec<store::SessionRow>, AuthError> {
+        let mut tx = self.store().begin_as(user, None).await?;
+        let rows = self.store().list_sessions(&mut tx, user).await?;
+        store::commit(tx).await?;
+        Ok(rows)
+    }
+
+    /// 本人の指定セッションを失効させる。他人のセッションは 404 扱い。
+    pub async fn revoke_user_session(
+        &self,
+        user: UserId,
+        session: Uuid,
+    ) -> Result<bool, AuthError> {
+        let mut tx = self.store().begin_as(user, None).await?;
+        let revoked = self
+            .store()
+            .revoke_user_session(&mut tx, session, user)
+            .await?;
+        store::commit(tx).await?;
+        Ok(revoked)
+    }
+
+    /// 現在のセッション以外を失効させる。
+    pub async fn revoke_other_sessions(&self, user: UserId, keep: Uuid) -> Result<u64, AuthError> {
+        let mut tx = self.store().begin_as(user, None).await?;
+        let revoked = self
+            .store()
+            .revoke_other_sessions(&mut tx, user, keep)
+            .await?;
+        store::commit(tx).await?;
+        Ok(revoked)
+    }
+
+    /// IdP 主導ログアウト（subject / sid）。
+    pub async fn revoke_identity_sessions(
+        &self,
+        provider: &str,
+        subject: Option<&str>,
+        idp_sid: Option<&str>,
+    ) -> Result<u64, AuthError> {
+        let mut tx = self.store().begin_unscoped().await?;
+        let revoked = self
+            .store()
+            .revoke_sessions_by_identity(&mut tx, provider, subject, idp_sid)
+            .await?;
+        store::commit(tx).await?;
+        Ok(revoked)
+    }
+
+    /// 期限切れ・失効済みセッションの掃除。
+    pub async fn cleanup_sessions(&self, older_than_days: i64) -> Result<u64, AuthError> {
+        let mut tx = self.store().begin_unscoped().await?;
+        let deleted = self
+            .store()
+            .cleanup_sessions(&mut tx, older_than_days)
+            .await?;
+        store::commit(tx).await?;
+        Ok(deleted)
+    }
+
+    /// セッション Cookie の `session_id` と `user_id` から身元を組み立てる。
     ///
-    /// 毎回 `core.app_user` を引くのは、退職・無効化を即座に反映するため。
+    /// 毎回 DB を見るのは、ログアウト・失効・退職・無効化を即座に反映するため。
     /// Cookie に表示名を入れない（名前を変えたときに古い名前が出る）。
     pub async fn authenticate_session(
         &self,
+        session: Uuid,
         user: UserId,
+        idle_seconds: Option<i64>,
     ) -> Result<Option<Authenticated>, AuthError> {
         let mut tx = self.store().begin_unscoped().await?;
-        let row = self.store().find_user_by_id(&mut tx, user).await?;
-        store::commit(tx).await?;
+        let live = self
+            .store()
+            .session_is_live(&mut tx, session, user, idle_seconds)
+            .await?;
+        if !live {
+            store::commit(tx).await?;
+            return Ok(None);
+        }
 
-        Ok(match row {
-            Some(u) if u.is_active => Some(Authenticated {
-                user_id: u.id,
-                display_name: u.display_name,
-                via: Credential::Session,
-            }),
+        let row = self.store().find_user_by_id(&mut tx, user).await?;
+        let authenticated = match row {
+            Some(u) if u.is_active => {
+                self.store().touch_session(&mut tx, session).await?;
+                Some(Authenticated {
+                    user_id: u.id,
+                    display_name: u.display_name,
+                    via: Credential::Session,
+                    session_id: Some(session),
+                })
+            }
             _ => None,
-        })
+        };
+        store::commit(tx).await?;
+        Ok(authenticated)
     }
 
     /// PAT で認証する。失効・期限切れはここで弾く。
@@ -133,7 +277,76 @@ impl App {
             user_id: user.id,
             display_name: user.display_name,
             via: Credential::Token,
+            session_id: None,
         }))
+    }
+
+    /// OIDC の (issuer, subject) から身元を組み立てる。
+    ///
+    /// 未知の subject は `None`。JIT プロビジョニングはしない
+    /// （IdP 側の任意ユーザーがこの製品に入れる事故を防ぐ）。
+    pub async fn authenticate_external_identity(
+        &self,
+        provider: &str,
+        subject: &str,
+    ) -> Result<Option<Authenticated>, AuthError> {
+        let mut tx = self.store().begin_unscoped().await?;
+        let user = self
+            .store()
+            .find_user_by_external_identity(&mut tx, provider, subject)
+            .await?;
+
+        let live = user.filter(|u| u.is_active);
+        if live.is_some() {
+            self.store()
+                .touch_external_identity(&mut tx, provider, subject)
+                .await?;
+        }
+        store::commit(tx).await?;
+
+        Ok(live.map(|u| Authenticated {
+            user_id: u.id,
+            display_name: u.display_name,
+            via: Credential::Session,
+            session_id: None,
+        }))
+    }
+
+    /// ログインの成否を監査ログへ残す。subject は生値を残さず SHA-256 にする。
+    pub async fn record_auth_audit(&self, audit: &AuthAudit<'_>) -> Result<(), AuthError> {
+        let subject_hash = audit
+            .subject
+            .map(|s| format!("{:x}", Sha256::digest(s.as_bytes())));
+        let detail = serde_json::json!({
+            "provider": audit.provider,
+            "subject_sha256": subject_hash,
+            "reason": audit.reason,
+        });
+        let actor_id = audit
+            .actor
+            .map(|u| u.to_string())
+            .unwrap_or_else(|| "unknown".to_owned());
+
+        let mut tx = self.store().begin_unscoped().await?;
+        self.store()
+            .append_audit(
+                &mut tx,
+                &store::AuditDraft {
+                    project_id: audit.project.map(|p| p.as_uuid()),
+                    actor_type: "USER".into(),
+                    actor_id: actor_id.clone(),
+                    action: audit.action.to_owned(),
+                    target_type: Some("user".into()),
+                    target_id: audit.actor.map(|u| u.to_string()),
+                    input_digest: None,
+                    result: audit.result.to_owned(),
+                    detail,
+                    trace_id: audit.trace_id.map(str::to_owned),
+                },
+            )
+            .await?;
+        store::commit(tx).await?;
+        Ok(())
     }
 
     /// 所属一覧。ログイン直後の画面がこれで決まる。

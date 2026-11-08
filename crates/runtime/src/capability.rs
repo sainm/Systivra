@@ -26,6 +26,13 @@ pub enum Capability {
     GraphNeighbor,
     GraphPath,
     CodeGetSymbol,
+    ImpactAnalyze,
+    ImpactGetReport,
+    TestPlanGenerate,
+    TestCaseGenerate,
+    TestRunExecute,
+    CoverageGet,
+    ProjectList,
 }
 
 impl Capability {
@@ -36,7 +43,33 @@ impl Capability {
             Self::GraphNeighbor => "graph.neighbor",
             Self::GraphPath => "graph.path",
             Self::CodeGetSymbol => "code.get_symbol",
+            Self::ImpactAnalyze => "impact.analyze",
+            Self::ImpactGetReport => "impact.get_report",
+            Self::TestPlanGenerate => "test.plan_generate",
+            Self::TestCaseGenerate => "test.case_generate",
+            Self::TestRunExecute => "test.run_execute",
+            Self::CoverageGet => "coverage.get",
+            Self::ProjectList => "project.list",
         }
+    }
+
+    /// MCP の文字列境界。未知の名前は `None`（勝手に作らない）。
+    pub fn parse(name: &str) -> Option<Self> {
+        Some(match name {
+            "knowledge.search" => Self::KnowledgeSearch,
+            "knowledge.get_evidence" => Self::KnowledgeGetEvidence,
+            "graph.neighbor" => Self::GraphNeighbor,
+            "graph.path" => Self::GraphPath,
+            "code.get_symbol" => Self::CodeGetSymbol,
+            "impact.analyze" => Self::ImpactAnalyze,
+            "impact.get_report" => Self::ImpactGetReport,
+            "test.plan_generate" => Self::TestPlanGenerate,
+            "test.case_generate" => Self::TestCaseGenerate,
+            "test.run_execute" => Self::TestRunExecute,
+            "coverage.get" => Self::CoverageGet,
+            "project.list" => Self::ProjectList,
+            _ => return None,
+        })
     }
 
     /// この能力に対応する行為。権限の可否は `Permission` の表で決める。
@@ -46,8 +79,14 @@ impl Capability {
             Self::KnowledgeSearch
             | Self::KnowledgeGetEvidence
             | Self::GraphNeighbor
-            | Self::GraphPath => Permission::Search,
+            | Self::GraphPath
+            | Self::ProjectList => Permission::Search,
             Self::CodeGetSymbol => Permission::CodeAnalysis,
+            Self::ImpactAnalyze | Self::ImpactGetReport => Permission::ImpactRun,
+            Self::TestPlanGenerate | Self::TestCaseGenerate | Self::CoverageGet => {
+                Permission::TestAssetEdit
+            }
+            Self::TestRunExecute => Permission::TestRun,
         }
     }
 }
@@ -66,7 +105,7 @@ pub struct Principal {
     pub role: Role,
     /// Agent 経由の呼び出しなら、その Agent が許可されている能力名。
     /// `None` は人間による直接呼び出し。
-    pub agent_capabilities: Option<Vec<&'static str>>,
+    pub agent_capabilities: Option<Vec<String>>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -95,6 +134,36 @@ impl CapabilityError {
     }
 }
 
+/// `AgentRun` の予算消費（手順 6）。
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct BudgetUsage {
+    pub tool_calls: i32,
+    pub tokens: i32,
+    pub wall_time_sec: i32,
+    pub cost_usd: f64,
+}
+
+/// 超過した項目名を返す。超過なしなら `None`。
+/// 判定は単調で、AI の出力に依存しない。
+pub fn budget_exceeded(
+    budget: &contracts::AgentBudgets,
+    used: &BudgetUsage,
+) -> Option<&'static str> {
+    if used.tool_calls > budget.max_tool_calls {
+        return Some("max_tool_calls");
+    }
+    if used.tokens > budget.max_tokens {
+        return Some("max_tokens");
+    }
+    if used.wall_time_sec > budget.max_wall_time_sec {
+        return Some("max_wall_time_sec");
+    }
+    if used.cost_usd > budget.max_cost_usd {
+        return Some("max_cost_usd");
+    }
+    None
+}
+
 /// ゲートウェイ。Phase 1 では許可判定のみ。
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CapabilityGateway;
@@ -116,7 +185,7 @@ impl CapabilityGateway {
 
         // 2. Agent のホワイトリスト
         if let Some(allowed) = &principal.agent_capabilities {
-            if !allowed.contains(&capability.as_str()) {
+            if !allowed.iter().any(|name| name == capability.as_str()) {
                 return Err(CapabilityError::AgentDenied(capability.as_str()));
             }
         }
@@ -137,7 +206,7 @@ impl CapabilityGateway {
 mod tests {
     use super::*;
 
-    fn principal(role: Role, agent: Option<Vec<&'static str>>) -> Principal {
+    fn principal(role: Role, agent: Option<Vec<String>>) -> Principal {
         Principal {
             user_id: UserId::new(),
             project: ProjectId::new(),
@@ -157,10 +226,35 @@ mod tests {
     #[test]
     fn agent_outside_whitelist_is_denied() {
         let gw = CapabilityGateway::new();
-        let p = principal(Role::Owner, Some(vec!["knowledge.search"]));
+        let p = principal(Role::Owner, Some(vec!["knowledge.search".to_owned()]));
         let err = gw.authorize(&p, Capability::CodeGetSymbol).unwrap_err();
         assert_eq!(err, CapabilityError::AgentDenied("code.get_symbol"));
         assert_eq!(err.to_code(), ErrorCode::AgentCapabilityDenied);
+    }
+
+    #[test]
+    fn budget_exhaustion_is_deterministic() {
+        let budget = contracts::AgentBudgets::default();
+        assert_eq!(budget_exceeded(&budget, &BudgetUsage::default()), None);
+        let over = BudgetUsage {
+            tool_calls: budget.max_tool_calls + 1,
+            ..BudgetUsage::default()
+        };
+        assert_eq!(budget_exceeded(&budget, &over), Some("max_tool_calls"));
+        let tokens = BudgetUsage {
+            tokens: budget.max_tokens + 1,
+            ..BudgetUsage::default()
+        };
+        assert_eq!(budget_exceeded(&budget, &tokens), Some("max_tokens"));
+    }
+
+    #[test]
+    fn unknown_capability_name_is_not_created() {
+        assert_eq!(Capability::parse("sql.query"), None);
+        assert_eq!(
+            Capability::parse("impact.analyze"),
+            Some(Capability::ImpactAnalyze)
+        );
     }
 
     #[test]
@@ -168,11 +262,11 @@ mod tests {
         // Agent のホワイトリストは「上限を削る」方向にだけ働く。
         // 許可されていても、ロールが足りなければ通らない（積集合）。
         let gw = CapabilityGateway::new();
-        let p = principal(Role::Viewer, Some(vec!["graph.path"]));
+        let p = principal(Role::Viewer, Some(vec!["graph.path".to_owned()]));
         assert!(gw.authorize(&p, Capability::GraphPath).is_ok());
 
         // ホワイトリストに無い能力は、ロールが足りていても落ちる。
-        let strong = principal(Role::Owner, Some(vec!["graph.path"]));
+        let strong = principal(Role::Owner, Some(vec!["graph.path".to_owned()]));
         let err = gw
             .authorize(&strong, Capability::KnowledgeSearch)
             .unwrap_err();

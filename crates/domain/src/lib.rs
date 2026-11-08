@@ -7,6 +7,9 @@ pub mod ids;
 pub mod permission;
 pub mod project;
 
-pub use ids::{DocumentId, JobId, ProjectId, UserId, WorkspaceId};
+pub use ids::{
+    ChunkId, DocumentId, EvidenceId, JobId, ParseRunId, ProjectId, RevisionId, SessionId, UserId,
+    WorkspaceId,
+};
 pub use permission::{Access, Permission};
 pub use project::{Project, Role, SourceKind};

@@ -9,8 +9,9 @@ use uuid::Uuid;
 macro_rules! id_type {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, utoipa::ToSchema)]
         #[serde(transparent)]
+        #[schema(value_type = uuid::Uuid)]
         pub struct $name(pub Uuid);
 
         impl $name {
@@ -68,8 +69,28 @@ id_type!(
     JobId
 );
 id_type!(
+    /// ログインセッション。
+    SessionId
+);
+id_type!(
     /// 設計書 1 冊（ファイル 1 つ）。
     DocumentId
+);
+id_type!(
+    /// 文書の版。
+    RevisionId
+);
+id_type!(
+    /// 検索単位の chunk。
+    ChunkId
+);
+id_type!(
+    /// 証拠。
+    EvidenceId
+);
+id_type!(
+    /// 解析実行。
+    ParseRunId
 );
 
 #[cfg(test)]

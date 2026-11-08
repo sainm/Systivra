@@ -1,0 +1,12 @@
+{
+  "description": "Deterministic source-only Phase 4 SAMPLE. All calls are project-local and have a unique receiver type, method name, and arity.",
+  "classes": 41,
+  "methods": 250,
+  "resolved_calls": 200,
+  "reflection_calls": 30,
+  "min_symbol_recall": 0.98,
+  "min_call_precision": 0.98,
+  "incremental_total_files": 41,
+  "incremental_selected_files": 1,
+  "max_incremental_fraction": 0.1
+}

@@ -1,0 +1,43 @@
+{
+  "name": "systivra-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 15173 --strictPort",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "gen:api": "openapi-typescript ../../contracts/api/openapi.json -o src/generated/api.ts",
+    "check:i18n": "node scripts/check-i18n.mjs",
+    "check:ui:phase2": "node scripts/ui-check-phase2.mjs",
+    "check:ui:phase3": "node scripts/ui-check-phase3.mjs",
+    "check:ui:phase4": "node scripts/ui-check-phase4.mjs",
+    "check:ui:phase5": "node scripts/ui-check-phase5.mjs",
+    "check:ui:phase6": "node scripts/ui-check-phase6.mjs",
+    "check:ui:phase7": "node scripts/ui-check-phase7.mjs",
+    "check:ui:phase7-inquiry": "node scripts/ui-check-phase7-inquiry.mjs",
+    "check:ui:phase7-mcp": "node scripts/ui-check-phase7-mcp.mjs",
+    "check:ui:phase8": "node scripts/ui-check-phase8.mjs",
+    "check:ui:phase5-inquiry": "node scripts/ui-check-phase5-inquiry.mjs",
+    "check:ui:workflow": "node scripts/ui-check-workflow-editor.mjs"
+  },
+  "dependencies": {
+    "i18next": "26.7.2",
+    "pdfjs-dist": "6.5.438",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-i18next": "17.1.13",
+    "react-router-dom": "7.18.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.4",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.2.1",
+    "openapi-typescript": "7.13.0",
+    "playwright-core": "^1.65.0",
+    "tailwindcss": "4.3.4",
+    "typescript": "5.9.3",
+    "vite": "8.3.6"
+  }
+}

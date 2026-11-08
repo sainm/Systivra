@@ -41,6 +41,15 @@ impl ApiError {
     pub fn code(&self) -> ErrorCode {
         self.code
     }
+
+    pub fn from_app(error: app::AppError, trace: &TraceId) -> Self {
+        let mut api_error = ApiError::new(error.code(), trace).detail(error.detail());
+        if matches!(error.code(), ErrorCode::ValidationSchema) {
+            api_error =
+                api_error.field_error(FieldError::new("request", "INVALID", error.detail()));
+        }
+        api_error
+    }
 }
 
 impl IntoResponse for ApiError {

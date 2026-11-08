@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>画面 S09 商品編集 - SAMPLE</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; line-height: 1.6; }
+    .sample-mark { display: inline-block; border: 1px solid #888; padding: 0 6px; font-size: 12px; }
+    label { display: block; margin: 12px 0 4px; font-weight: 600; }
+    input { padding: 6px; width: 28rem; max-width: 90%; }
+    button { padding: 6px 18px; margin-top: 12px; }
+    .field-error { color: #b00020; margin-top: 12px; }
+    .ok { color: #0a7a3b; margin-top: 12px; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <span class="sample-mark">SAMPLE</span>
+  <h1>画面 S09 商品編集</h1>
+
+  <form id="form" novalidate>
+    <label for="value" id="field-label">項目</label>
+    <input id="value" name="value" data-testid="value-input" autocomplete="off" />
+    <div>
+      <button type="submit" data-testid="submit">登録</button>
+    </div>
+  </form>
+
+  <div id="field-error" class="field-error" role="alert" hidden>入力値を確認してください</div>
+  <div id="ok" class="ok" hidden>登録しました</div>
+
+  <section>
+    <h2>影響項目</h2>
+    <div id="impact-label"></div>
+  </section>
+
+  <script>
+const params = new URLSearchParams(location.search);
+const field = params.get("field") || "項目";
+document.getElementById("field-label").textContent = field;
+document.getElementById("value").setAttribute("aria-label", field);
+const impactLabel = params.get("label");
+if (impactLabel) {
+  document.getElementById("impact-label").textContent = impactLabel;
+}
+
+function isInvalid(value) {
+  if (value.trim() === "") return true;
+  const chars = [...value];
+  if (chars.length > 20) return true;
+  if (/[A-Za-z]/.test(value)) return true;
+  for (const ch of chars) {
+    const cp = ch.codePointAt(0);
+    if (cp >= 0xe000 && cp <= 0xf8ff) return true;
+    if (cp > 0xffff) return true;
+    if (cp === 0x3000) return true;
+    if (cp === 0x3099 || cp === 0x309a) return true;
+  }
+  if (/^-?\d+$/.test(value)) {
+    const n = Number(value);
+    if (n < 1 || n > 99) return true;
+  }
+  if (value.includes("|")) {
+    const [start, end] = value.split("|");
+    if (start >= end) return true;
+  }
+  return false;
+}
+
+document.getElementById("form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const value = document.getElementById("value").value;
+  const bad = isInvalid(value);
+  document.getElementById("field-error").hidden = !bad;
+  document.getElementById("ok").hidden = bad;
+});
+
+  </script>
+</body>
+</html>

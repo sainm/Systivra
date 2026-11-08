@@ -6,7 +6,7 @@
 
 use std::net::SocketAddr;
 
-use api::{auth::SessionConfig, router};
+use api::{auth::SessionConfig, router_with_oidc};
 use app::App;
 
 #[tokio::main]
@@ -28,15 +28,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 署名鍵が無いまま起動しない。空鍵で動かすと Cookie を誰でも偽造できる。
     let session = SessionConfig::from_env()?;
 
-    let http = router(app, session);
+    // 一部だけ設定された OIDC 設定は起動時に失敗させる（SSO 有効のつもりで
+    // 無効のまま動く事故を防ぐ）。未設定ならパスワードログインのみ。
+    let oidc = providers::OidcConfig::from_env()?
+        .map(|config| std::sync::Arc::new(providers::OidcRuntime::new(config)));
+
+    let http = router_with_oidc(app, session, oidc);
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
     tracing::info!(%addr, "systivra-api listening");
 
-    axum::serve(listener, http)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        http.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
 
     Ok(())
 }

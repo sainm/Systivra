@@ -1,0 +1,8 @@
+{
+  "source_rules": 300,
+  "min_rules": 300,
+  "min_data_rows": 900,
+  "min_valid_dsl_ratio": 1.0,
+  "japanese_labels": ["外字1字", "サロゲートペア", "結合文字", "全角空格"],
+  "coverage_recompute_identical": true
+}

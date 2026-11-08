@@ -40,7 +40,7 @@
 
 **設計上の要点（重要：pruning に依存しない）**：
 
-- **`project_id` でパーティション pruning は効かない**。A-02 は単一プロジェクト 60,000 冊であり、`HASH(project_id)` なら全 1,200 万行が 1 区に集中する。だから `kb.chunk` は `HASH(id)`、`kb.embedding_1024` は `HASH(chunk_id)` で **32〜64 区へ均等分散**する（`05-データモデル.md` §1.4、`detail/02-database-ddl.md` §6）。
+- **`project_id` でパーティション pruning は効かない**。A-02 は単一プロジェクト 60,000 冊であり、`HASH(project_id)` なら全 1,200 万行が 1 区に集中する。だから `corpus.chunk` は `HASH(id)`、`corpus.embedding_1024` は `HASH(chunk_id)` で **32〜64 区へ均等分散**する（`05-データモデル.md` §1.4、`detail/02-database-ddl.md` §6）。
 - 速度が出る理由は「1 区だけ見る」ではなく、**「各区が 18〜38 万ベクトルしか持たず、64 区を並列に捌ける」** こと。検索は全分区へ fan-out し、各区の上位 60 件だけを RRF で合流させる。合成後の候補は依然 60 件、リランクは 1 回。
 - fan-out の並列度は 16 を起点にする。64 区 ÷ 16 = 4 波。逐次 64 区を回すと受入 2.0s を超えるため**並列は必須**。
 - `project_id` は全行の列 + `(project_id, is_current, …)` 索引 + RLS で強制する。partition pruning を防衛線にしない。
@@ -156,7 +156,7 @@ DB 書き込み        0.5h
 ### 6.4 検索
 
 - `hnsw.ef_search=80` を起点。P95 と recall を見て調整。
-- **全分区へ fan-out する**。並列度 16 を起点（64 区なら 4 波）。`SELECT … FROM kb.embedding_1024 WHERE project_id = $1 AND model_id = $2` を各分区に並列発行し、分区ごとの上位 60 件だけを返す。逐次 64 区は禁止。
+- **全分区へ fan-out する**。並列度 16 を起点（64 区なら 4 波）。`SELECT … FROM corpus.embedding_1024 WHERE project_id = $1 AND model_id = $2` を各分区に並列発行し、分区ごとの上位 60 件だけを返す。逐次 64 区は禁止。
 - `project_id` は RLS + `(project_id, is_current)` 索引で絞る。partition pruning を前提にしたクエリを書かない。
 - `hnsw.iterative_scan=relaxed_order` でフィルタ後の空振りを防ぐ。
 - 全文は `ts_rank_cd` を候補 60 件に限定。分区ごとに上位を絞ってから RRF で合流。
@@ -172,7 +172,7 @@ DB 書き込み        0.5h
 
 ### 6.6 フロント
 
-- 一覧は仮想スクロール（50 行ずつ）。全件 DOM を作らない。
+- Phase 1 の一覧は通常 table（50 行/ページ）。仮想スクロールは Phase 2。
 - グラフは 800 ノード超で集約表示。3,000 超で Canvas。
 - レイアウト計算は Web Worker。
 - 画像・スクリーンショットは遅延読み込み。`loading="lazy"`。
@@ -185,8 +185,9 @@ DB 書き込み        0.5h
 |---|---|---|
 | 0 | 200 冊で 5,000 セル/秒/コア、メモリ < 120 B/セル | `criterion` + 実ファイル |
 | 2 | 100 万 chunk で検索 P95 < 1.5s、1,000 冊取込 < 2h | k6 + 実データ |
-| 4 | Java 13,000 の全解析 < 60 分、増分 < 10% | 実測 |
-| 5 | 250 万 Fact で影響 < 120s | 実測 |
+| 4 | Java 13,000 の全解析 < 60 分、増分 < 10% | **PASS** 21.79s、1 / 13,000（0.0077%）、91,000 Symbol / 104,000 Fact |
+| 4 | 250 万 Fact の COPY / supersede / Neo4j 再投影 | **PASS（合成）** COPY 19.253s、supersede 5.384s、Neo4j 176.168s |
+| 5 | 250 万 Fact で影響 < 120s | **PASS（合成）** 2,500,005 edge、frontier 限定 6-hop 1.07s |
 | 6 | 100 ケース実行 < 60 分（4 並列） | Playwright |
 | 8 | 同時 50 ユーザーで P95 劣化 < 30% | k6 |
 

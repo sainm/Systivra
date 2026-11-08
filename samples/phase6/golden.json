@@ -1,0 +1,962 @@
+{
+  "TP-0314c980-TC-0001-1": {
+    "expected": "PASSED",
+    "plan": "TP-0314c980",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-0314c980-TC-0001-2": {
+    "expected": "PASSED",
+    "plan": "TP-0314c980",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-0314c980-TC-0001-3": {
+    "expected": "PASSED",
+    "plan": "TP-0314c980",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-0314c980-TC-0002-4": {
+    "expected": "PASSED",
+    "plan": "TP-0314c980",
+    "covers_rules": [
+      "af7284d0-3aaf-5b48-80a1-3a85185e3f58"
+    ],
+    "covers_screens": []
+  },
+  "TP-0a623fcc-TC-0001-1": {
+    "expected": "PASSED",
+    "plan": "TP-0a623fcc",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-0a623fcc-TC-0001-2": {
+    "expected": "PASSED",
+    "plan": "TP-0a623fcc",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-0a623fcc-TC-0001-3": {
+    "expected": "PASSED",
+    "plan": "TP-0a623fcc",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-0a623fcc-TC-0002-4": {
+    "expected": "PASSED",
+    "plan": "TP-0a623fcc",
+    "covers_rules": [
+      "af7284d0-3aaf-5b48-80a1-3a85185e3f58"
+    ],
+    "covers_screens": []
+  },
+  "TP-15aa2021-TC-0001-1": {
+    "expected": "PASSED",
+    "plan": "TP-15aa2021",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-15aa2021-TC-0001-2": {
+    "expected": "PASSED",
+    "plan": "TP-15aa2021",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-15aa2021-TC-0001-3": {
+    "expected": "PASSED",
+    "plan": "TP-15aa2021",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-15aa2021-TC-0002-4": {
+    "expected": "PASSED",
+    "plan": "TP-15aa2021",
+    "covers_rules": [
+      "af7284d0-3aaf-5b48-80a1-3a85185e3f58"
+    ],
+    "covers_screens": []
+  },
+  "TP-15cedd0b-TC-0001-1": {
+    "expected": "PASSED",
+    "plan": "TP-15cedd0b",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-15cedd0b-TC-0001-2": {
+    "expected": "PASSED",
+    "plan": "TP-15cedd0b",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-15cedd0b-TC-0001-3": {
+    "expected": "PASSED",
+    "plan": "TP-15cedd0b",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-15cedd0b-TC-0002-4": {
+    "expected": "PASSED",
+    "plan": "TP-15cedd0b",
+    "covers_rules": [
+      "af7284d0-3aaf-5b48-80a1-3a85185e3f58"
+    ],
+    "covers_screens": []
+  },
+  "TP-273b865f-TC-0001-1": {
+    "expected": "PASSED",
+    "plan": "TP-273b865f",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-273b865f-TC-0001-2": {
+    "expected": "PASSED",
+    "plan": "TP-273b865f",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-273b865f-TC-0001-3": {
+    "expected": "PASSED",
+    "plan": "TP-273b865f",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-273b865f-TC-0002-4": {
+    "expected": "PASSED",
+    "plan": "TP-273b865f",
+    "covers_rules": [
+      "af7284d0-3aaf-5b48-80a1-3a85185e3f58"
+    ],
+    "covers_screens": []
+  },
+  "TP-2f775b8b-TC-0001-1": {
+    "expected": "PASSED",
+    "plan": "TP-2f775b8b",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-2f775b8b-TC-0001-2": {
+    "expected": "PASSED",
+    "plan": "TP-2f775b8b",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-2f775b8b-TC-0001-3": {
+    "expected": "PASSED",
+    "plan": "TP-2f775b8b",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-2f775b8b-TC-0002-4": {
+    "expected": "PASSED",
+    "plan": "TP-2f775b8b",
+    "covers_rules": [
+      "af7284d0-3aaf-5b48-80a1-3a85185e3f58"
+    ],
+    "covers_screens": []
+  },
+  "TP-52cc878f-TC-0001-1": {
+    "expected": "PASSED",
+    "plan": "TP-52cc878f",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-52cc878f-TC-0001-2": {
+    "expected": "PASSED",
+    "plan": "TP-52cc878f",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-52cc878f-TC-0001-3": {
+    "expected": "PASSED",
+    "plan": "TP-52cc878f",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-52cc878f-TC-0002-4": {
+    "expected": "PASSED",
+    "plan": "TP-52cc878f",
+    "covers_rules": [
+      "af7284d0-3aaf-5b48-80a1-3a85185e3f58"
+    ],
+    "covers_screens": []
+  },
+  "TP-5e5604dd-TC-0001-1": {
+    "expected": "PASSED",
+    "plan": "TP-5e5604dd",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-5e5604dd-TC-0001-2": {
+    "expected": "PASSED",
+    "plan": "TP-5e5604dd",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-5e5604dd-TC-0001-3": {
+    "expected": "PASSED",
+    "plan": "TP-5e5604dd",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-5e5604dd-TC-0002-4": {
+    "expected": "PASSED",
+    "plan": "TP-5e5604dd",
+    "covers_rules": [
+      "af7284d0-3aaf-5b48-80a1-3a85185e3f58"
+    ],
+    "covers_screens": []
+  },
+  "TP-5e65ca10-TC-0001-1": {
+    "expected": "PASSED",
+    "plan": "TP-5e65ca10",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-5e65ca10-TC-0001-2": {
+    "expected": "PASSED",
+    "plan": "TP-5e65ca10",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-5e65ca10-TC-0001-3": {
+    "expected": "PASSED",
+    "plan": "TP-5e65ca10",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-5e65ca10-TC-0002-4": {
+    "expected": "PASSED",
+    "plan": "TP-5e65ca10",
+    "covers_rules": [
+      "af7284d0-3aaf-5b48-80a1-3a85185e3f58"
+    ],
+    "covers_screens": []
+  },
+  "TP-69842ab6-TC-0001-1": {
+    "expected": "PASSED",
+    "plan": "TP-69842ab6",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-69842ab6-TC-0001-2": {
+    "expected": "PASSED",
+    "plan": "TP-69842ab6",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-69842ab6-TC-0001-3": {
+    "expected": "PASSED",
+    "plan": "TP-69842ab6",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-69842ab6-TC-0002-4": {
+    "expected": "PASSED",
+    "plan": "TP-69842ab6",
+    "covers_rules": [
+      "af7284d0-3aaf-5b48-80a1-3a85185e3f58"
+    ],
+    "covers_screens": []
+  },
+  "TP-7465a5b0-TC-0001-1": {
+    "expected": "PASSED",
+    "plan": "TP-7465a5b0",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-7465a5b0-TC-0001-2": {
+    "expected": "PASSED",
+    "plan": "TP-7465a5b0",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-7465a5b0-TC-0001-3": {
+    "expected": "PASSED",
+    "plan": "TP-7465a5b0",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-7465a5b0-TC-0002-4": {
+    "expected": "PASSED",
+    "plan": "TP-7465a5b0",
+    "covers_rules": [
+      "af7284d0-3aaf-5b48-80a1-3a85185e3f58"
+    ],
+    "covers_screens": []
+  },
+  "TP-781ac503-TC-0001-1": {
+    "expected": "PASSED",
+    "plan": "TP-781ac503",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-781ac503-TC-0001-2": {
+    "expected": "PASSED",
+    "plan": "TP-781ac503",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-781ac503-TC-0001-3": {
+    "expected": "PASSED",
+    "plan": "TP-781ac503",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-781ac503-TC-0002-4": {
+    "expected": "PASSED",
+    "plan": "TP-781ac503",
+    "covers_rules": [
+      "af7284d0-3aaf-5b48-80a1-3a85185e3f58"
+    ],
+    "covers_screens": []
+  },
+  "TP-7df3f846-TC-0001-1": {
+    "expected": "PASSED",
+    "plan": "TP-7df3f846",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-7df3f846-TC-0001-2": {
+    "expected": "PASSED",
+    "plan": "TP-7df3f846",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-7df3f846-TC-0001-3": {
+    "expected": "PASSED",
+    "plan": "TP-7df3f846",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-7df3f846-TC-0002-4": {
+    "expected": "PASSED",
+    "plan": "TP-7df3f846",
+    "covers_rules": [
+      "af7284d0-3aaf-5b48-80a1-3a85185e3f58"
+    ],
+    "covers_screens": []
+  },
+  "TP-80f3a5bb-TC-0001-1": {
+    "expected": "PASSED",
+    "plan": "TP-80f3a5bb",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-80f3a5bb-TC-0001-2": {
+    "expected": "PASSED",
+    "plan": "TP-80f3a5bb",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-80f3a5bb-TC-0001-3": {
+    "expected": "PASSED",
+    "plan": "TP-80f3a5bb",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-80f3a5bb-TC-0002-4": {
+    "expected": "PASSED",
+    "plan": "TP-80f3a5bb",
+    "covers_rules": [
+      "af7284d0-3aaf-5b48-80a1-3a85185e3f58"
+    ],
+    "covers_screens": []
+  },
+  "TP-997aadb8-TC-0001-1": {
+    "expected": "PASSED",
+    "plan": "TP-997aadb8",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-997aadb8-TC-0001-2": {
+    "expected": "PASSED",
+    "plan": "TP-997aadb8",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-997aadb8-TC-0001-3": {
+    "expected": "PASSED",
+    "plan": "TP-997aadb8",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-997aadb8-TC-0002-4": {
+    "expected": "PASSED",
+    "plan": "TP-997aadb8",
+    "covers_rules": [
+      "af7284d0-3aaf-5b48-80a1-3a85185e3f58"
+    ],
+    "covers_screens": []
+  },
+  "TP-a5566227-TC-0001-1": {
+    "expected": "PASSED",
+    "plan": "TP-a5566227",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-a5566227-TC-0001-2": {
+    "expected": "PASSED",
+    "plan": "TP-a5566227",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-a5566227-TC-0001-3": {
+    "expected": "PASSED",
+    "plan": "TP-a5566227",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-a5566227-TC-0002-4": {
+    "expected": "PASSED",
+    "plan": "TP-a5566227",
+    "covers_rules": [
+      "af7284d0-3aaf-5b48-80a1-3a85185e3f58"
+    ],
+    "covers_screens": []
+  },
+  "TP-aed8c79a-TC-0001-1": {
+    "expected": "PASSED",
+    "plan": "TP-aed8c79a",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-aed8c79a-TC-0001-2": {
+    "expected": "PASSED",
+    "plan": "TP-aed8c79a",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-aed8c79a-TC-0001-3": {
+    "expected": "PASSED",
+    "plan": "TP-aed8c79a",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-aed8c79a-TC-0002-4": {
+    "expected": "PASSED",
+    "plan": "TP-aed8c79a",
+    "covers_rules": [
+      "af7284d0-3aaf-5b48-80a1-3a85185e3f58"
+    ],
+    "covers_screens": []
+  },
+  "TP-c0c4b601-TC-0001-1": {
+    "expected": "PASSED",
+    "plan": "TP-c0c4b601",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-c0c4b601-TC-0001-2": {
+    "expected": "PASSED",
+    "plan": "TP-c0c4b601",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-c0c4b601-TC-0001-3": {
+    "expected": "PASSED",
+    "plan": "TP-c0c4b601",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-c0c4b601-TC-0002-4": {
+    "expected": "PASSED",
+    "plan": "TP-c0c4b601",
+    "covers_rules": [
+      "af7284d0-3aaf-5b48-80a1-3a85185e3f58"
+    ],
+    "covers_screens": []
+  },
+  "TP-d0dd8a9c-TC-0001-1": {
+    "expected": "PASSED",
+    "plan": "TP-d0dd8a9c",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-d0dd8a9c-TC-0001-2": {
+    "expected": "PASSED",
+    "plan": "TP-d0dd8a9c",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-d0dd8a9c-TC-0001-3": {
+    "expected": "PASSED",
+    "plan": "TP-d0dd8a9c",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-d0dd8a9c-TC-0002-4": {
+    "expected": "PASSED",
+    "plan": "TP-d0dd8a9c",
+    "covers_rules": [
+      "af7284d0-3aaf-5b48-80a1-3a85185e3f58"
+    ],
+    "covers_screens": []
+  },
+  "TP-d1da795d-TC-0001-1": {
+    "expected": "PASSED",
+    "plan": "TP-d1da795d",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-d1da795d-TC-0001-2": {
+    "expected": "PASSED",
+    "plan": "TP-d1da795d",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-d1da795d-TC-0001-3": {
+    "expected": "PASSED",
+    "plan": "TP-d1da795d",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-d1da795d-TC-0002-4": {
+    "expected": "PASSED",
+    "plan": "TP-d1da795d",
+    "covers_rules": [
+      "af7284d0-3aaf-5b48-80a1-3a85185e3f58"
+    ],
+    "covers_screens": []
+  },
+  "TP-d48bc584-TC-0001-1": {
+    "expected": "PASSED",
+    "plan": "TP-d48bc584",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-d48bc584-TC-0001-2": {
+    "expected": "PASSED",
+    "plan": "TP-d48bc584",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-d48bc584-TC-0001-3": {
+    "expected": "PASSED",
+    "plan": "TP-d48bc584",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-d48bc584-TC-0002-4": {
+    "expected": "PASSED",
+    "plan": "TP-d48bc584",
+    "covers_rules": [
+      "af7284d0-3aaf-5b48-80a1-3a85185e3f58"
+    ],
+    "covers_screens": []
+  },
+  "TP-d648a648-TC-0001-1": {
+    "expected": "PASSED",
+    "plan": "TP-d648a648",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-d648a648-TC-0001-2": {
+    "expected": "PASSED",
+    "plan": "TP-d648a648",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-d648a648-TC-0001-3": {
+    "expected": "PASSED",
+    "plan": "TP-d648a648",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-d648a648-TC-0002-4": {
+    "expected": "PASSED",
+    "plan": "TP-d648a648",
+    "covers_rules": [
+      "af7284d0-3aaf-5b48-80a1-3a85185e3f58"
+    ],
+    "covers_screens": []
+  },
+  "TP-e968b257-TC-0001-1": {
+    "expected": "PASSED",
+    "plan": "TP-e968b257",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-e968b257-TC-0001-2": {
+    "expected": "PASSED",
+    "plan": "TP-e968b257",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-e968b257-TC-0001-3": {
+    "expected": "PASSED",
+    "plan": "TP-e968b257",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-e968b257-TC-0002-4": {
+    "expected": "PASSED",
+    "plan": "TP-e968b257",
+    "covers_rules": [
+      "af7284d0-3aaf-5b48-80a1-3a85185e3f58"
+    ],
+    "covers_screens": []
+  },
+  "TP-fe710416-TC-0001-1": {
+    "expected": "PASSED",
+    "plan": "TP-fe710416",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-fe710416-TC-0001-2": {
+    "expected": "PASSED",
+    "plan": "TP-fe710416",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-fe710416-TC-0001-3": {
+    "expected": "PASSED",
+    "plan": "TP-fe710416",
+    "covers_rules": [
+      "b12a14fe-9cf4-5f22-9f96-05201fb7db2c"
+    ],
+    "covers_screens": []
+  },
+  "TP-fe710416-TC-0002-4": {
+    "expected": "PASSED",
+    "plan": "TP-fe710416",
+    "covers_rules": [
+      "af7284d0-3aaf-5b48-80a1-3a85185e3f58"
+    ],
+    "covers_screens": []
+  },
+  "TP-0afcecb9-TC-I-0001": {
+    "expected": "PASSED",
+    "plan": "TP-0afcecb9",
+    "covers_rules": [],
+    "covers_screens": [
+      "画面 S03 部署編集"
+    ]
+  },
+  "TP-1c6b9645-TC-I-0001": {
+    "expected": "PASSED",
+    "plan": "TP-1c6b9645",
+    "covers_rules": [],
+    "covers_screens": [
+      "画面 S17 顧客一覧"
+    ]
+  },
+  "TP-30464e53-TC-I-0001": {
+    "expected": "PASSED",
+    "plan": "TP-30464e53",
+    "covers_rules": [],
+    "covers_screens": [
+      "画面 S02 ユーザ一覧"
+    ]
+  },
+  "TP-30e7389c-TC-I-0001": {
+    "expected": "PASSED",
+    "plan": "TP-30e7389c",
+    "covers_rules": [],
+    "covers_screens": [
+      "画面 S04 部署一覧"
+    ]
+  },
+  "TP-40df9b0e-TC-I-0001": {
+    "expected": "PASSED",
+    "plan": "TP-40df9b0e",
+    "covers_rules": [],
+    "covers_screens": [
+      "画面 S14 請求書発行"
+    ]
+  },
+  "TP-5bbe8197-TC-I-0001": {
+    "expected": "PASSED",
+    "plan": "TP-5bbe8197",
+    "covers_rules": [],
+    "covers_screens": [
+      "画面 S01 ユーザ編集"
+    ]
+  },
+  "TP-619a975a-TC-I-0001": {
+    "expected": "PASSED",
+    "plan": "TP-619a975a",
+    "covers_rules": [],
+    "covers_screens": [
+      "画面 S09 商品編集"
+    ]
+  },
+  "TP-782510c3-TC-I-0001": {
+    "expected": "PASSED",
+    "plan": "TP-782510c3",
+    "covers_rules": [],
+    "covers_screens": [
+      "画面 S23 ファイル取込"
+    ]
+  },
+  "TP-7c7a155f-TC-I-0001": {
+    "expected": "PASSED",
+    "plan": "TP-7c7a155f",
+    "covers_rules": [],
+    "covers_screens": [
+      "画面 S20 帳票出力"
+    ]
+  },
+  "TP-81bea873-TC-I-0001": {
+    "expected": "PASSED",
+    "plan": "TP-81bea873",
+    "covers_rules": [],
+    "covers_screens": [
+      "画面 S08 マスタ編集"
+    ]
+  },
+  "TP-867955ba-TC-I-0001": {
+    "expected": "PASSED",
+    "plan": "TP-867955ba",
+    "covers_rules": [],
+    "covers_screens": [
+      "画面 S21 バッチ監視"
+    ]
+  },
+  "TP-86c16070-TC-I-0001": {
+    "expected": "PASSED",
+    "plan": "TP-86c16070",
+    "covers_rules": [],
+    "covers_screens": [
+      "画面 S05 権限設定"
+    ]
+  },
+  "TP-86cb2fff-TC-I-0001": {
+    "expected": "PASSED",
+    "plan": "TP-86cb2fff",
+    "covers_rules": [],
+    "covers_screens": [
+      "画面 S15 入金照会"
+    ]
+  },
+  "TP-8a8f9a28-TC-I-0001": {
+    "expected": "PASSED",
+    "plan": "TP-8a8f9a28",
+    "covers_rules": [],
+    "covers_screens": [
+      "画面 S11 在庫照会"
+    ]
+  },
+  "TP-8b5f177d-TC-I-0001": {
+    "expected": "PASSED",
+    "plan": "TP-8b5f177d",
+    "covers_rules": [],
+    "covers_screens": [
+      "画面 S24 監査ログ照会"
+    ]
+  },
+  "TP-907cef8c-TC-I-0001": {
+    "expected": "PASSED",
+    "plan": "TP-907cef8c",
+    "covers_rules": [],
+    "covers_screens": [
+      "画面 S18 問い合わせ登録"
+    ]
+  },
+  "TP-a49b0dfa-TC-I-0001": {
+    "expected": "PASSED",
+    "plan": "TP-a49b0dfa",
+    "covers_rules": [],
+    "covers_screens": [
+      "画面 S12 受注登録"
+    ]
+  },
+  "TP-b584d88f-TC-I-0001": {
+    "expected": "PASSED",
+    "plan": "TP-b584d88f",
+    "covers_rules": [],
+    "covers_screens": [
+      "画面 S13 受注一覧"
+    ]
+  },
+  "TP-b7192bb6-TC-I-0001": {
+    "expected": "PASSED",
+    "plan": "TP-b7192bb6",
+    "covers_rules": [],
+    "covers_screens": [
+      "画面 S07 ログイン履歴"
+    ]
+  },
+  "TP-ba91f36c-TC-I-0001": {
+    "expected": "PASSED",
+    "plan": "TP-ba91f36c",
+    "covers_rules": [],
+    "covers_screens": [
+      "画面 S10 商品一覧"
+    ]
+  },
+  "TP-cf9c06a0-TC-I-0001": {
+    "expected": "PASSED",
+    "plan": "TP-cf9c06a0",
+    "covers_rules": [],
+    "covers_screens": [
+      "画面 S06 パスワード変更"
+    ]
+  },
+  "TP-d20c36c9-TC-I-0001": {
+    "expected": "PASSED",
+    "plan": "TP-d20c36c9",
+    "covers_rules": [],
+    "covers_screens": [
+      "画面 S16 顧客編集"
+    ]
+  },
+  "TP-f0e9f193-TC-I-0001": {
+    "expected": "PASSED",
+    "plan": "TP-f0e9f193",
+    "covers_rules": [],
+    "covers_screens": [
+      "画面 S19 問い合わせ一覧"
+    ]
+  },
+  "TP-f7225934-TC-I-0001": {
+    "expected": "PASSED",
+    "plan": "TP-f7225934",
+    "covers_rules": [],
+    "covers_screens": [
+      "画面 S22 メール配信"
+    ]
+  }
+}

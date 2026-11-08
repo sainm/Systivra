@@ -11,7 +11,7 @@
 |---|---|---|
 | A-01 | **可（等価検証）** | Docker / compose provider が無いため `docker compose up` 自体は未実行。`docker-compose.yml` と同じ Dockerfile・初期化 SQL（001〜009 + roles）・ネットワーク・環境変数で Podman 5.8 に db / api / worker / web を起動し、`/healthz` 200・ログイン画面 200・**コンテナ経由の E2E（取込 → 解析 → 検索 → 原文 → 70 矩形ハイライト）** まで通過。compose YAML は構文検証済み |
 | A-02 | **可** | 100 ページ PDF → 100 chunk。通常解析は job 作成〜完了 **1.70〜2.65 秒**（5 分以内） |
-| A-03 | **可** | 「住所チェックの桁数と文字種」で top-12 が返り、1 位は 37 ページ。`latency_ms` は 5 回で 40〜78ms（受入上限 300ms） |
+| A-03 | **可** | 「住所チェックの桁数と文字種」で top-12 が返り、1 位は 37 ページ。`latency_ms` は 20 回で min 18ms / median 18ms / **P95 49ms** / max 71ms（受入上限 300ms） |
 | A-04 | **可（降格あり）** | 検索結果から 37 ページを開き、PDF.js テキスト層で **70 個の矩形**をハイライト。API の `bbox` は `null`（§降格） |
 | A-05 | **可** | 41/100 ページ・checkpoint 41 で worker を kill。再起動後 42〜100 を処理し、chunk **100 件 / distinct 100 件**、checkpoint 100 |
 | A-06 | **可** | 途中の `Last-Event-ID` から再接続し、**95 イベント + done 1 件**。DB の該当イベント集合と完全一致、id は単調増加 |
@@ -28,8 +28,8 @@ job fdbeffbc… 23.75s（うち 300ms/頁の意図的遅延 20s）
 job 64faba5a…  2.24s
 job 64e5592a…  1.70s
 
-# A-03
-78 / 53 / 50 / 41 / 40 ms
+# A-03（20 回）
+min=18ms / median=18ms / P95=49ms / max=71ms
 
 # A-05
 kill 時: status=RUNNING files_done=41 checkpoint=41 chunks=41

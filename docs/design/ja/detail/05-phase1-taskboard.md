@@ -24,7 +24,7 @@
 | XLSX 解析 | 60,000 冊の本命だが、骨格の証明とは独立 | Phase 2（`detail/01`） |
 | pg_bigm / PGroonga / RRF / rerank | 日本語検索の品質は Phase 2 の評価課題 | Phase 2 |
 | グラフ / Ontology / Neo4j 投影 | 影響分析に不要な間に複雑性を持ち込まない | Phase 3（`detail/07`） |
-| Java / JSP / OpenRewrite | 別ワーカー、別言語 | Phase 4（`detail/06`） |
+| Java / JSP / 構文解析 | Tree-sitter とプロジェクト内シンボル索引 | Phase 4（`detail/06`） |
 | Agent / MCP / Workflow | 能力ゲートウェイは Phase 7 | Phase 7 |
 | 自動コード変更 | **D-04 により禁止**。将来導入も承認必須 | — |
 
@@ -57,7 +57,7 @@
 ```text
 P1-ENV-01 Cargo workspace / compose / CI
       │
-      ├──> P1-DB-01  マイグレーション 001〜002・分区・RLS
+      ├──> P1-DB-01  マイグレーション 001〜009・分区・RLS
       │        │
       │        ├──> P1-API-01 認証 / project_id 注入 / エラー envelope
       │        │        │
@@ -88,8 +88,8 @@ P1-ENV-01 Cargo workspace / compose / CI
 | `P1-API-02` | **完了（Phase 1 範囲）** | upload-url / 登録 / 一覧（カーソル）/ 論理削除 / 原本取得。`CONFLICT_ALREADY_IMPORTED`、監査、PDF 署名検査。bulk-import は Phase 2（`08-実装計画.md` の大規模取込） |
 | `P1-JOB-01` | **完了** | 冪等 enqueue、`SKIP LOCKED` 取得、heartbeat、3 指標進捗、checkpoint、`job_event`。SSE は `Last-Event-ID` 再送と `done` 終端 |
 | `P1-PARSE-01` | **完了（降格）** | docling ではなくプロセス内 PDF 抽出。100 ページを 1.7〜2.7 秒で DocNode + chunk 化。41/100 で kill → 再開し重複 0 |
-| `P1-RAG-01` | **完了（降格）** | 800 token / 80 overlap（ページ単位）、bigram/katakana の FTS、1024 次元ローカル埋め込み、32 分区 fan-out。検索 40〜78ms |
-| `P1-EVID-01` | **完了（降格）** | 証拠は `quote` 部分文字列を検証して保存。`bbox` は null で、UI が PDF.js テキスト層から矩形を算出（70 矩形を実測） |
+| `P1-RAG-01` | **完了（降格）** | 800 token / 80 overlap（ページ単位）、bigram/katakana の FTS、1024 次元ローカル埋め込み、32 分区 fan-out。検索 20 回で P95 49ms |
+| `P1-EVID-01` | **完了（降格）** | 生成した `quote` がページ原文の部分文字列であることを検証して保存。外部 quote の 422 は Phase 2。`bbox` は null で、UI が PDF.js テキスト層から矩形を算出（70 矩形を実測） |
 | `P1-API-03` | **完了** | search / chunks / evidence / jobs / events。`latency_ms`、`degraded`、資源単位の認可 |
 | `P1-FE-01` | **完了** | ログイン / プロジェクト / 設計書一覧・取込 / 文書詳細 / 検索 + エビデンスドロワー。1440px と 607px を実ブラウザで確認 |
 | `P1-DOC-01` | **完了** | `contracts/api/openapi.json` を utoipa から生成し CI で一致検査。フロント型は `openapi-typescript` 生成 |
@@ -115,10 +115,10 @@ P1-ENV-01 Cargo workspace / compose / CI
 | ID | タスク | 担当 | 依存 | 成果物 | 完了条件（DoD） | 人日 |
 |---|---|---|---|---|---|---|
 | P1-ENV-01 | 13 crate の Cargo workspace、compose、CI | BE-1 | — | `Cargo.toml` / `docker-compose.yml` / `.github/workflows/ci.yml` | `docker compose up` で `/healthz` が 200。CI で `cargo test` が緑 | 2 |
-| P1-DB-01 | マイグレーション 001〜002 | BE-1 | ENV-01 | `migrations/001_core.sql` / `002_core_ops.sql` | §5.1 の全条件 | 3 |
+| P1-DB-01 | マイグレーション 001〜009（corpus 含む） | BE-1 | ENV-01 | `migrations/001_core.sql` 〜 `009_rename_corpus.sql` | §5.1 の全条件 | 3 |
 | P1-API-01 | 認証・認可・エラー基盤 | BE-1 | DB-01 | `api/src/middleware/` | §5.2 の全条件 | 3 |
 | P1-DOC-01 | utoipa で OpenAPI 生成、CI 差分検査 | BE-1 | API-01 | `contracts/api/openapi.json` | 手書き YAML が無い。生成 spec とコミット済み spec の不一致で CI が落ちる | 1 |
-| P1-PARSE-01a | docling-serve 接続と NDJSON 受け口 | BE-2 | ENV-01 | `worker/src/docling.rs` | 100 ページ PDF を投げて節 + 段落の JSON が返る | 2 |
+| P1-PARSE-01a | PDF 抽出の受け口（Phase 1 は `pdf-extract`、docling は Phase 2） | BE-2 | ENV-01 | `worker/src/pdf.rs` | 100 ページ PDF から節 + 段落を抽出できる | 2 |
 | P1-FE-01a | Vite + 型生成 + ログイン骨格 | FE | DOC-01(spec 暫定) | `apps/web/` | ログイン画面が表示され、OpenAPI 由来の型が import できる | 2 |
 | P1-QA-01a | 貫通チェック用の 1 シナリオ台本 | DS | — | `docs/phase1/walking-skeleton.md` | §6 の A-01〜A-10 が 1 行ずつ検証手順を持つ | 2 |
 
@@ -130,18 +130,18 @@ P1-ENV-01 Cargo workspace / compose / CI
 | P1-JOB-01 | job / checkpoint / 再試行 / SSE | BE-1 | DB-01, API-02 | `store/src/job.rs` | §5.4。worker kill → 再起動で再開 | 3 |
 | P1-DOC-02 | 監査ログ（全書き込み） | BE-1 | DB-01 | `store/src/audit.rs` | 「誰がいつどのファイルを上げたか」を照会できる。UPDATE / DELETE を REVOKE | 1 |
 | P1-PARSE-01 | PDF 解析 → DocNode 木 | BE-2 | PARSE-01a | `worker/src/pdf.rs` | §5.5。100 ページ 5 分以内 | 2 |
-| P1-FE-01b | プロジェクト一覧 / 文書一覧 / アップロード | FE | API-02 | 3 画面 | presigned PUT → 登録 → 一覧に出る。カーソルページング | 4 |
+| P1-FE-01b | プロジェクト一覧 / 文書一覧 / アップロード | FE | API-02 | 3 画面 | 署名付き PUT（Phase 1 はローカル）→ 登録 → 一覧に出る。カーソルページング | 4 |
 | P1-QA-01b | W2 貫通チェック（モック可） | BE-1 + BE-2 | API-02, PARSE-01 | チェック結果 | アップロード → job 完了まで通る。詰まりを W3 に持ち越さない | 1 |
 
 ### W3：検索と証拠（BE 9 / FE 4 / DS 1）
 
 | ID | タスク | 担当 | 依存 | 成果物 | 完了条件 | 人日 |
 |---|---|---|---|---|---|---|
-| P1-RAG-01 | 800 token 固定長 chunk / 単一モデル / ANN | BE-2 | PARSE-01 | `engine-rag/` | §5.6。任意クエリで top-k が返る | 3 |
-| P1-EVID-01 | 証拠レコード、locator、quote 検証 | BE-2 | RAG-01 | `engine-rag/src/evidence.rs` | §5.7。`quote` が原文部分文字列でないと 422 | 2 |
+| P1-RAG-01 | 800 token 固定長 chunk / 単一モデル / FTS + ANN | BE-2 | PARSE-01 | `engine-rag/` | §5.6。任意クエリで top-k が返る | 3 |
+| P1-EVID-01 | 証拠レコード、locator、生成時 quote 検証 | BE-2 | RAG-01 | `engine-rag/src/evidence.rs` | §5.7。生成した quote が原文部分文字列であること。外部 quote の 422 は Phase 2 | 2 |
 | P1-API-03 | search / chunks / evidence / jobs / events | BE-1 | RAG-01, JOB-01 | `api/src/routes/knowledge.rs` | `detail/04` §2.1〜§3.2 の契約テストが通る | 3 |
 | P1-FE-01c | 文書詳細 + 検索結果 + 証拠ドロワー | FE | API-03 | 2 画面 | 検索結果クリックで PDF 該当ページが開きハイライト | 4 |
-| P1-DOC-03 | 用語集・日本語 UI レビュー | DS | FE-01c | `07-UI.md` 差分 | 禁則処理、全角括弧、和暦、日文字体が適用 | 1 |
+| P1-DOC-03 | 用語集・日本語 UI レビュー | DS | FE-01c | `07-UI.md` 差分 | 禁則処理、全角括弧、日文字体が適用。和暦は Phase 2 | 1 |
 | P1-QA-01c | 契約テスト（OpenAPI ↔ 実装） | BE-1 | API-03 | CI ジョブ | `oasdiff` で破壊的変更 0 | 1 |
 
 ### W4：結合・受入（BE 5 / FE 2 / DS 1 / 残りはバッファ）
@@ -159,7 +159,7 @@ P1-ENV-01 Cargo workspace / compose / CI
 
 ### 5.1 `P1-DB-01` マイグレーション
 
-`detail/02-database-ddl.md` §7 の `001_core` / `002_core_ops` を適用する。Phase 1 で PDF しか扱わなくても**以下を初日から作る**。
+`detail/02-database-ddl.md` §7 の `001_core` 〜 `009_rename_corpus` を適用する。Phase 1 で PDF しか扱わなくても**以下を初日から作る**。
 
 | 項目 | Phase 1 での要求 | 理由 |
 |---|---|---|
@@ -167,7 +167,7 @@ P1-ENV-01 Cargo workspace / compose / CI
 | `corpus.embedding_1024.project_id` | 冗長列として保持し、`corpus.chunk.project_id` と一致させる | 検索のスコープは RLS + 索引で強制。pruning に依存しない |
 | `core.outbox_event` | `event_id` PK、`seq` IDENTITY、`outbox_dead_letter` まで作成 | Phase 3 の投影で列を足さない |
 | `graph_meta.entity.projection_seq` | 列だけ作る（値は 0） | Phase 3 で ALTER しない |
-| `core.audit_log` | `PRIMARY KEY (id, occurred_at)` + 月次 RANGE 分区、12 か月先まで | 追記専用。UPDATE / DELETE を REVOKE |
+| `core.audit_log` | `PRIMARY KEY (id, occurred_at)` + 月次 RANGE 分区、24 か月先まで | 追記専用。UPDATE / DELETE を REVOKE |
 | `corpus.document.doc_type` | §0.3 の列挙で `CHECK` | `DETAILED_SPEC` を誤登録させない。Phase 1 の PDF は `MANUAL` または `OTHER` |
 
 **RLS**：`project_id` を持つ全表に `USING (project_id = current_setting('app.project_id')::uuid)` を適用。アプリはトランザクション開始時に `SET LOCAL app.project_id = …` を**サーバー側コンテキストから**設定する。リクエスト本文の値は使わない。
@@ -205,27 +205,29 @@ P1-ENV-01 Cargo workspace / compose / CI
 
 - 状態：`QUEUED / RUNNING / SUCCEEDED / SUCCEEDED_WITH_ERRORS / FAILED / CANCELLED`。
 - 取得は `FOR UPDATE SKIP LOCKED LIMIT 200`。`Idempotency-Key` 未指定でも内容ダイジェストで生成し、重複送信は同一 `job_id` を返す。
-- `job_checkpoint` に「処理済みページ番号 / 完了 chunk 数」を 1,000 chunk ごとに保存。worker kill → 再起動で未完了だけ再処理。
+- `job_checkpoint` に「処理済みページ番号 / 完了 chunk 数」を保存。Phase 1 はページ完了ごと（1,000 chunk 単位は Phase 2）。worker kill → 再起動で未完了だけ再処理。
 - `progress` は **ファイル / セル / chunk の 3 指標**を必ず持たせる（Phase 1 はセル = 0 でもキーを残す。`detail/01` §11 と同じ形にしておく）。
 - SSE は全イベントに単調増加の `id`、`Last-Event-ID` で再開、20 秒ごとに `: ping`、`done` / `error` で接続を閉じる（`detail/04` §3.2）。
 - 長い処理は `202 + {job_id, links}`。HTTP 接続を握らせない。
 
 ### 5.5 `P1-PARSE-01` PDF 解析
 
-- **自作 `doc-worker` を書かない**。`quay.io/docling-project/docling-serve-cpu:v1.38.1` をそのまま使う。
+- Phase 1 はプロセス内 `pdf-extract` を使う（`docling-serve` は Phase 2。`docs/phase1/handoff.md`）。
 - 返ってくる節・段落を `corpus.doc_node`（Document / Section / Paragraph）へ。セル単位ノードは作らない。
-- 証拠位置は `page + bbox + char_range`。PDF が縦書き / ルビを含む場合は `writing_mode: vertical` を `metadata` に残し、ルビは独立テキスト層として保持する（`00-全体設計.md` J-04）。
-- 日本語ファイル名・見出しは **原文 NFC で保存**、検索用にだけ NFKC + 旧字体マップを掛ける（J-03）。`quote_hash = sha256(NFC(quote))`。
-- タイムアウト 5 分。超過は `VALIDATION_SCHEMA` でラップし、`detail.code` に内部コードを残す。
+- 証拠位置は `page + char_range`。Phase 1 の `bbox` は null とし、UI が PDF.js テキスト層から矩形を算出する。
+  縦書き / ルビの `writing_mode` と独立ルビ層は Phase 2（`00-全体設計.md` J-04）。
+- Phase 1 は抽出時に NFKC で互換漢字を統一する。原文 NFC と検索用 NFKC の分離は Phase 2（J-03）。
+  `quote_hash = sha256(NFC(quote))` は維持する。
+- 解析タイムアウト 5 分は Phase 2。Phase 1 は worker のジョブ単位で失敗を記録する。
 
 ### 5.6 `P1-RAG-01` 最小 RAG
 
 | 項目 | Phase 1 | Phase 2 で置き換えるもの |
 |---|---|---|
 | chunk | 固定長 **800 token**、overlap 80 | 構造認識、親子 chunk、Excel 12 行ブロック |
-| 日本語処理 | Lindera(IPADIC) + `to_tsvector('simple', tokenized)` | L2 pg_bigm + クエリルーティング + RRF |
-| embedding | 単一モデル、`corpus.embedding_1024` | モデル切替 / `index_build` / halfvec |
-| 検索 | ベクトルのみ | ハイブリッド + rerank + graph assist |
+| 日本語処理 | Phase 1 は文字 bigram + katakana + `to_tsvector('simple', tokenized)`。Lindera(IPADIC) は Phase 2 | L2 pg_bigm + クエリルーティング + RRF |
+| embedding | 単一モデル、`corpus.embedding_1024`（Phase 1 はローカルハッシュ） | モデル切替 / `index_build` / halfvec |
+| 検索 | Phase 1 は fulltext + vector 融合（fallback）。vector-only の評価は Phase 2 | ハイブリッド + rerank + graph assist |
 | 分区 | 32〜64 へ fan-out（実質ヒットは少数） | 本番 64 区並列（`detail/03` §2） |
 
 > **Phase 1 から fan-out の呼び出し形を作る**。1 分区だけを決め打ちで叩く実装にすると、Phase 2 で 1,200 万行対応のときに検索層を作り直すことになる。
@@ -237,7 +239,8 @@ P1-ENV-01 Cargo workspace / compose / CI
 ### 5.7 `P1-EVID-01` 証拠
 
 - `corpus.evidence` に `locator / quote / quote_hash / resolution / confidence` を保存。`evidence` は 1 Fact につき 1 件以上（Phase 4 の `code.fact_evidence` と同じ規約）。
-- `quote` は**原文の完全な部分文字列**。サーバーが検証し、不一致なら 500 ではなく `EVIDENCE_QUOTE_MISMATCH`（422）。
+- `quote` は**原文の完全な部分文字列**。Phase 1 は chunk 生成時に部分文字列を保証する。
+  外部から `quote` を受け取る API と `EVIDENCE_QUOTE_MISMATCH`（422）は Phase 2。
 - JSON の `quote_hash` は `sha256:` + lowercase hex 64 文字。DB は `bytea`。
 - UI は `locator` だけを見てページを開く。**AI に locator を生成させない**（Phase 1 に AI は無いが、規約を先に固定する）。
 
@@ -246,8 +249,8 @@ P1-ENV-01 Cargo workspace / compose / CI
 5 画面：ログイン / プロジェクト一覧 / 文書一覧 / 文書詳細 / 検索。Phase 1 では `07-UI.md` の**ナビゲーション入口を段階公開**する（Skills / Tools / Users / Data Sources / Settings は非表示）。
 
 - 型は `openapi-typescript` で生成。手書きの DTO を置かない。
-- 一覧は仮想スクロール 50 行。全件 DOM を作らない。
-- 日本語 UI：禁則処理、全角括弧、和暦、日文字体。エラーは 2 行目に業務 `code` と `trace_id` を小さく出す。
+- Phase 1 の一覧は通常 table（50 行/ページ）。仮想スクロールは Phase 2。
+- 日本語 UI：禁則処理、全角括弧、日文字体。日付は西暦（和暦は Phase 2）。エラーは 2 行目に業務 `code` と `trace_id` を小さく出す。
 - PDF ビューアは該当ページのみ描画（100 ページ全部を DOM に載せない）。
 
 ---
@@ -259,7 +262,7 @@ P1-ENV-01 Cargo workspace / compose / CI
 | A-01 | `docker compose up` | `/healthz` 200、ログイン画面が表示 | compose 起動 |
 | A-02 | 100 ページ PDF をアップロード | 5 分以内に `status=SUCCEEDED`、`doc_node` と chunk が生成 | 100 ページ / 5 分 |
 | A-03 | 任意の日本語クエリで検索 | top-k が返り、全件に `locator` と `latency_ms` | 位置特定可 |
-| A-04 | 検索結果をクリック | PDF の該当ページが開き、`bbox` がハイライト | 該当ページを開く |
+| A-04 | 検索結果をクリック | PDF の該当ページが開き、`bbox` または UI のテキスト層矩形がハイライト（Phase 1 は後者） | 該当ページを開く |
 | A-05 | 解析中に worker を kill → 再起動 | 未完了ジョブが `job_checkpoint` から再開、重複 chunk 0 | チェックポイント再開 |
 | A-06 | 切断した SSE を `Last-Event-ID` で再接続 | 欠番なく `done` まで届く | SSE 進捗 |
 | A-07 | 同じ PDF を `Idempotency-Key` 付きで 2 回登録 | 同一 `job_id`、追加 chunk 0、`CONFLICT_ALREADY_IMPORTED` | 冪等 |

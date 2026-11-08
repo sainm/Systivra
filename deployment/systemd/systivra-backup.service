@@ -1,0 +1,14 @@
+[Unit]
+Description=Systivra PostgreSQL backup
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=systivra
+WorkingDirectory=/opt/systivra
+EnvironmentFile=/etc/systivra/backup.env
+ExecStart=/opt/systivra/scripts/backup.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

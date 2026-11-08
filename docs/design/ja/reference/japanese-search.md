@@ -217,7 +217,7 @@ score = 1/(60+rank_vec) + 1/(60+rank_fts) + 1/(60+rank_bigram)
 
 ```text
 L1 の語単位 recall < 0.75        → 辞書を確認。必要なら UniDic（法務確認）
-L2 の部分一致 recall < 0.80      → pg_bigm のパラメータ（gin_key_limit）か trigram を検討
+L2 の部分一致 recall < 0.80      → pg_trgm のパラメータ、または組み込み n-gram（bigram）分割を検討
 2 分類の差が 25 ポイント超       → 「ルーティング + 二路融合」を必須と確定（任意ではない）
 P95 > 800ms                      → top_k 縮小、rerank 停止、PGroonga を評価
 ```
@@ -232,11 +232,11 @@ P95 > 800ms                      → top_k 縮小、rerank 停止、PGroonga を
 
 ```sql
 -- L1：常に存在
-ALTER TABLE kb.chunk ADD COLUMN tokenized text NOT NULL DEFAULT '';
-CREATE INDEX chunk_fts_idx ON kb.chunk USING gin (fts) WHERE is_current;
+ALTER TABLE corpus.chunk ADD COLUMN tokenized text NOT NULL DEFAULT '';
+CREATE INDEX chunk_fts_idx ON corpus.chunk USING gin (fts) WHERE is_current;
 
 -- L2：拡張がある場合のみ（マイグレーションで条件分岐）
-CREATE INDEX chunk_bigm_idx ON kb.chunk USING gin (text gin_bigm_ops)
+CREATE INDEX chunk_bigm_idx ON corpus.chunk USING gin (text gin_bigm_ops)
   WHERE is_current;
 ```
 
@@ -247,9 +247,9 @@ CREATE INDEX chunk_bigm_idx ON kb.chunk USING gin (text gin_bigm_ops)
 ```json
 {
   "tokenizer": "lindera",
-  "tokenizer_version": "6.0.0",
+  "tokenizer_version": "6.2.0",
   "dictionary": "ipadic",
-  "dictionary_version": "2026.08",
+  "dictionary_version": "2026.11",
   "mode": "normal"
 }
 ```
@@ -271,7 +271,7 @@ CREATE INDEX chunk_bigm_idx ON kb.chunk USING gin (text gin_bigm_ops)
 
 ### 7.4 ライセンス
 
-- Lindera 本体：MIT（6.0.0 で確認）。
+- Lindera 本体：MIT（6.2.0 で確認）。
 - 辞書：`lindera-ipadic` crate は MIT だが、IPADIC 辞書データ自体の条件は公開前に確認する。
 - 初期は IPADIC。**UniDic は使わない**（GPL / 商用の dual license で法務コストが高い）。リスク R-05 / T-07 に登録済み。
 

@@ -1,11 +1,11 @@
 //! 設計書の種別。`detail/04-api-contract.md` §0.3 の列挙が正本。
 //!
 //! **`DETAILED_SPEC` は存在しない。** 詳細設計は `DETAILED_DESIGN`。
-//! この 2 つを混ぜると DB の CHECK 制約で落ちる（`detail/02` §1 の `kb.document`）。
+//! この 2 つを混ぜると DB の CHECK 制約で落ちる（`detail/02` §1 の `corpus.document`）。
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum DocType {
     Requirement,
@@ -20,6 +20,13 @@ pub enum DocType {
 }
 
 impl DocType {
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|candidate| candidate.as_str() == value)
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Requirement => "REQUIREMENT",

@@ -6,6 +6,15 @@
 
 #![forbid(unsafe_code)]
 
+pub mod ai;
+pub mod oidc;
+
+pub use ai::{
+    from_env as ai_from_env, AiError, AiMessage, AiPricing, AiProvider, AiRequest, AiResponse,
+    AiStatus, AiTool, AiToolCall,
+};
+pub use oidc::{OidcConfig, OidcError, OidcIdentity, OidcLogout, OidcRuntime};
+
 /// Provider の健全性。`/readyz` と管理画面の表示に使う。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Health {

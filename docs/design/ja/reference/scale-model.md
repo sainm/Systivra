@@ -12,7 +12,7 @@
 | 設計書 | **60,000 本** | 大半が Excel。PDF / Word も混在 |
 | Java ファイル | **13,000** | 1 ファイル平均 120 行と仮定（要実測） |
 | JSP | **1,000+** | カスタム tag、scriptlet を含む |
-| リポジトリ | 1〜3 | Git / SVN / ディレクトリ |
+| リポジトリ | 1〜3 | Git / ディレクトリ / snapshot（SVN は未導入） |
 
 ---
 
@@ -37,7 +37,7 @@
 
 | 層 | 単位 | 用途 | 保存 |
 |---|---|---|---|
-| **Embedding chunk（親）** | 12 行前後の表ブロック。ヘッダを繰り返す | ベクトル検索・FTS・リランクの対象 | PG の `kb.chunk` に保存し、embedding を持つ |
+| **Embedding chunk（親）** | 12 行前後の表ブロック。ヘッダを繰り返す | ベクトル検索・FTS・リランクの対象 | PG の `corpus.chunk` に保存し、embedding を持つ |
 | **Evidence unit（子）** | 1 行、または 1 セル範囲 | 引用・ハイライト・テストデータの根拠 | 原則として行を保存しない。`Sheet!Range` から圧縮 artifact をオンデマンド展開 |
 
 - 親 chunk は 60,000 × 200 = **1,200 万**。
@@ -104,12 +104,12 @@
 ### 5.2 chunk をグラフに投影しない
 
 - グラフは Document / Sheet / 業務実体 / コード実体まで。
-- chunk は PG の `kb.chunk` に留め、RAG の証拠として使う。
+- chunk は PG の `corpus.chunk` に留め、RAG の証拠として使う。
 - 理由：1,200 万ノード + 辺は、影響分析に寄与しない割に Neo4j のメモリとバックアップを圧迫する。
 
 ### 5.3 chunk と embedding を分割する
 
-- `kb.chunk` は **`HASH(id)`**、`kb.embedding_1024` は **`HASH(chunk_id)`** で **32〜64 パーティション**へ均等分散する。**`project_id` をパーティションキーにしてはならない**。A-02 は単一プロジェクト（60,000 冊）なので `HASH(project_id)` は全 1,200 万行を 1 区に集中させ、分割も pruning も機能しない。
+- `corpus.chunk` は **`HASH(id)`**、`corpus.embedding_1024` は **`HASH(chunk_id)`** で **32〜64 パーティション**へ均等分散する。**`project_id` をパーティションキーにしてはならない**。A-02 は単一プロジェクト（60,000 冊）なので `HASH(project_id)` は全 1,200 万行を 1 区に集中させ、分割も pruning も機能しない。
 - 両者とも UUID のハッシュなので、分区数を揃えれば同一 chunk の `text` と `vec` は同じ番号の分区に入る（結合時の局所性）。
 - `project_id` は全行の列として保持し、`(project_id, is_current, …)` 索引と RLS でスコープを強制する。**プロジェクト pruning は使わない**。検索は全分区へ並列 fan-out し、各区 18〜38 万ベクトルの ANN 結果をマージする（`detail/03-performance.md` §2）。
 - **パーティションごとに HNSW** を張る。単一索引に 1,200 万ベクトルを入れると、構築時のメモリと vacuum が破綻する。
@@ -149,7 +149,6 @@
 | worker（調整・投影・影響） | 2 | 8 | 32 GB | 200 GB |
 | xlsx 解析ワーカー（`sep-worker` の解析専用プール） | 16 | 4 | 8 GB | 50 GB |
 | docling-serve | 2 | 8 | 32 GB | 100 GB |
-| rewrite-worker | 2 | 8 | 32 GB（heap 16G） | 100 GB |
 | postgres | 1 | 16 | 64 GB | 2 TB NVMe |
 | neo4j | 1 | 8 | 64 GB | 500 GB |
 | minio | 2 | 4 | 8 GB | 2 TB |

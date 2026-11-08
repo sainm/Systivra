@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::error_code::ErrorCode;
 
 /// 項目単位のエラー。`field` は JSON Pointer か API のフィールド名。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct FieldError {
     pub field: String,
     pub code: String,
@@ -30,7 +30,7 @@ impl FieldError {
 }
 
 /// エラー応答の本体。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct Problem {
     /// `https://systivra.example/errors/<CODE>`
     #[serde(rename = "type")]

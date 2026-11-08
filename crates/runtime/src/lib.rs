@@ -7,4 +7,6 @@
 
 pub mod capability;
 
-pub use capability::{Capability, CapabilityError, CapabilityGateway, Principal};
+pub use capability::{
+    budget_exceeded, BudgetUsage, Capability, CapabilityError, CapabilityGateway, Principal,
+};

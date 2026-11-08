@@ -17,6 +17,21 @@ Q-01「どうテストするか」（detail/08 §6）        本稿
 
 ## 1. 位置づけと正本
 
+> **2026-11-08 の実装状況**（詳細は `docs/phase6/acceptance.md`）。
+> `workers/runner/` が本稿の JSON DSL を実行し、`executions:import` に
+> `execution_source=PLAYWRIGHT` を付けて結果を戻す。
+> 1 case = 1 context、4 並列、失敗時のみ 4 点成果物と HAR、HAR は伏せ字化。
+> SAMPLE **24 画面 / 300 ルール**の合成 fixture と正解集を追加し、
+> 1,200 組のデータ派生・100 ケース / 4 並列 12.3 秒・初回合格率 100% を実測した。
+> `storage_state` の鮮度確認、データ seed / reset、成果物の保持期限（90 日 / trace 30 日）
+> と容量上限（trace 20 MB / run 20 GB、`TRUNCATED` / `EXPIRED`）、
+> §13 の失敗モード（先頭 3 件全滅 → `ENV` 中断、flaky 集計、`DATA` の reset 強制、
+> 成果物 0 件の `UPLOAD_FAILED`、環境ロック待ち）を実装し E2E で実測した。
+> Runner 単体テストは CI に登録した。
+> **未実装**: Collector の分離、16 ワーカー複数ノード、実案件 90 秒/ケースの性能。
+> 100 ケース / 4 並列は合成静的 SAMPLE で約 12〜15 秒であり、
+> 実案件の 90 秒/ケースを裏付ける計測ではない。
+
 | 項目 | 正本 |
 |---|---|
 | DSL の語彙・Playwright Runner の採用判断 | `04-コアエンジン.md` §4.6 |
@@ -241,6 +256,10 @@ Q-01「どうテストするか」（detail/08 §6）        本稿
 - `max_age_min` を超えた `storage_state` は Runner が**実行を止める**（`ENV` 失敗）。期限切れのまま流すと全ケースが `SELECTOR_NOT_FOUND` になり、原因究明に時間を溶かす。
 - `auth.type=form` も許すが、その場合のログイン手順は `environment.auth.steps` に 1 箇所だけ書き、全ケースで共有する。
 
+> **2026-11-08 の実装**: Runner は `STORAGE_STATE` と `STORAGE_STATE_MAX_AGE_MIN`
+> （既定 480）を受け取り、mtime が古い / ファイルが無い場合は run を作らずに
+> `ENV` で中断する。フォームログインの共有手順は未実装（`storage_state` のみ）。
+
 ### 5.3 データ
 
 | 方式 | 意味 | 使う場面 |
@@ -251,6 +270,11 @@ Q-01「どうテストするか」（detail/08 §6）        本稿
 | `SNAPSHOT` | DB スナップショット復元 | 重い。夜間の全回帰 |
 
 **同じ環境で 2 つの run を同時に流さない。** `environment.id` 単位でアドバイザリロックを取る（`pg_try_advisory_lock(hashtext(env_id))`）。取れなければ `QUEUED` のまま待つ。データ投入が衝突すると、失敗の原因が「テストのバグ」ではなく「他の run」になる。
+
+> **2026-11-08 の実装**: ロックは部分一意索引による「活性 run は 1 つ」で表現し、
+> Runner は `queued_behind` のとき `READY` まで待ってから実行する。
+> データは `DATA_MODE=NONE/SEED/RESET_ENDPOINT` + `SEED_URL` / `RESET_URL` で
+> run 開始時に投入 / 初期化する。`SNAPSHOT` は未実装。
 
 ### 5.4 ロケール
 
@@ -343,6 +367,12 @@ run 開始
 
 **`DATA` と `ASSERTION` を混ぜない**ことが運用上いちばん効く。混ぜると「テストが落ちている」のか「テストが悪い」のかが分からなくなり、誰もテストを信じなくなる。
 
+> **2026-11-08 の実装**: `ASSERTION` の期待値・実測値に重複 / 一意制約 /
+> 前提データ欠落の語が現れた場合だけ `DATA` へ寄せる（`classifyStepError`）。
+> Runner は `DATA` を受けると reset を 1 回強制し、run を止める。
+> 先頭 3 件が `SELECTOR_NOT_FOUND` / `TIMEOUT` / `NETWORK` で全滅した場合は
+> 3 件を `ENV` に再分類して run を止め、残りを `SKIPPED` として取り込む。
+
 ---
 
 ## 8. 成果物（artifacts）
@@ -383,6 +413,14 @@ s3://sep-artifacts/{project_id}/{test_run_id}/{execution_id}/
 | 1 run の合計上限 | 20 GB | 超過したら以降 trace 無効 |
 
 保持期限は `artifacts.uri` を消すのではなく、オブジェクトを削除して `artifacts` に `EXPIRED` を立てる。**リンク切れではなく「期限切れ」と分かる**ようにする。
+
+> **2026-11-08 の実装**: Runner が trace 20 MB 超過を切り詰めて `status=TRUNCATED` を、
+> run 合計 20 GB 超過後の trace 省略を記録する。worker が起動時 + 24 時間間隔で
+> 期限（90 日 / trace 30 日、`ARTIFACT_RETENTION_DAYS` / `TRACE_RETENTION_DAYS`）を
+> 適用し、`POST /projects/{pid}/test/artifacts:expire` と
+> `POST /projects/{pid}/test/runs/{rid}/artifacts:cleanup` で手動適用 / run 単位削除ができる。
+> 期限判定はファイルの mtime。実体は `ARTIFACT_ROOT`（既定はリポジトリ直下）配下の
+> ローカル FS で、S3 は未実装。
 
 ---
 
@@ -436,6 +474,16 @@ RETURN count(r) AS total,
 ```
 
 **縮退**：グラフ未構築、または `VERIFIES` 辺が未生成（Phase 6 前半）のときは、`Rule --DERIVED_FROM--> Requirement` で近似し、`coverage_snapshot.detail.degraded = ["REQUIREMENT_VIA_RULE"]` を立てる。近似値であることを**画面に出す**（T-06 に「近似」バッジ）。黙って別の数字を出さない。
+
+> **2026-11-08 の実装**: 被覆は PG の `graph_meta` を直接読む
+> （`TestCase.natural_key = test_case.id`、`VERIFIES` は `resolution=INFERRED`）。
+> `derive` が Requirement（`natural_key = rule:<uuid>`）/ TestCase / `VERIFIES` を投影し、
+> **同じ transaction で `core.outbox_event` にも積む**。worker の projector が
+> Neo4j へ MERGE し、PG と Neo4j の件数・解決状態が一致することを実測した
+> （`scripts/phase6-graph-eval.py`）。実要件の抽出は未接続のため Requirement は
+> ルール由来であり、`REQUIREMENT_INFERRED_FROM_RULE` を立てる。
+> `VERIFIES` 辺が 0 件のときだけ 0 + `REQUIREMENT_VIA_RULE` / `GRAPH_VERIFIES_UNAVAILABLE`
+> に縮退する。被覆計算は PG を読み、Neo4j の有無に依存しない。
 
 ### 9.3 算入除外（再掲。ここが解釈の余地になる）
 
@@ -576,6 +624,12 @@ seed_overhead    = 方式依存（SEED なら 10〜60s、SNAPSHOT なら 5〜20 
 | 9 | 同じ環境で 2 run が交錯 | 環境ロックが効いていない | 設計違反。ロックは `pg_try_advisory_lock` で取得し、取れなければ `QUEUED` |
 | 10 | run が終わらない | ケースが `BLOCKED` のまま collector 待ち | 全 case の終端状態を 5 分ごとに監査し、`RUNNING` が 30 分動かなければ `RUNNER` で落とす |
 
+> **2026-11-08 の実装**: 1 / 2（先頭 3 件全滅 → `ENV` 中断、残り `SKIPPED`）、
+> 4（flaky 集計）、6（`DATA` で reset 強制）、7（成果物 0 件 → `UPLOAD_FAILED` + run 警告）、
+> 9（環境ロック待ち）を Runner に実装し、`scripts/phase6-failure-eval.py` で実測した。
+> 10 の 30 分監査は runner 側のケース上限（180 秒）と run 上限（24 時間）までで、
+> 全 case の終端監査は API / worker 側の未実装。
+
 ---
 
 ## 14. 受入
@@ -599,7 +653,6 @@ seed_overhead    = 方式依存（SEED なら 10〜60s、SNAPSHOT なら 5〜20 
 | R-15 | `v=1` に未知の `action` を入れたケースが保存時に拒否される | 422 |
 | R-16 | Q-01 から `test-plans:derive` した計画が `DRAFT` で T-01 に現れ、`test_run` が作られない | `detail/08` §7 |
 | R-17 | SAMPLE 24 画面 / 300 ルールで、派生ケースの初回合格率が 60% 以上 | `08-実装計画.md` Phase 6 |
-
 R-16 が**この 2 つの詳細設計の接ぎ目**。ここが壊れると「Q-01 を見ただけで CI が走る」に戻る。
 
 ---

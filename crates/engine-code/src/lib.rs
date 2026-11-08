@@ -1,9 +1,20 @@
-//! スキャン編成、Fact 正規化、増分。
+//! コード走査、Java/JSP/XML/SQL の構文解析、Fact 正規化、増分判定。
 //!
-//! **Phase 4 で実装する。** ここは骨格だけを置いた場所で、まだロジックは無い。
-//! 空のまま置くのは、依存の向き（`02-アーキテクチャ` §3）を最初に固定するため。
-//! 実装を足すときに crate を新設すると、境界が後から動く。
+//! この crate はファイル IO を持ち込まず、呼び出し側が渡したバイト列を解析する。
+//! リポジトリ走査とスナップショット作成は worker が担い、ここでは言語判定、
+//! 文字コード・元バイト偏移、シンボル、Fact を決定的に生成する。
 
 #![forbid(unsafe_code)]
 
-// TODO(Phase 4): 実装。
+pub mod analyze;
+pub mod fact;
+pub mod jsp;
+pub mod language;
+pub mod text;
+
+pub use analyze::{analyze_sources, AnalyzeOptions};
+pub use fact::{
+    AnalysisError, AnalysisReport, BatchAnalysis, Evidence, Fact, FactObject, FactResolution,
+    FactSubject, ParserStats, SourceAnalysis, SourceInput, Symbol, SymbolKind,
+};
+pub use language::Language;

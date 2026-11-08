@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
-description = "ルール目録、Scenario / Case / Data、被覆定義。"
+description = "ルール抽出、Scenario / Case / Data 派生、DSL 検証、被覆・欠陥候補の決定論的計算。"
 
 [dependencies]
 domain.workspace = true
@@ -13,5 +13,10 @@ store.workspace = true
 providers.workspace = true
 engine-code.workspace = true
 async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+sha2.workspace = true
+unicode-normalization = "0.1"
 thiserror.workspace = true
 tracing.workspace = true

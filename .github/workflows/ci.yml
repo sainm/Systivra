@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:18
+        image: pgvector/pgvector:pg18
         env:
           POSTGRES_DB: systivra
           POSTGRES_USER: postgres
@@ -34,6 +34,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Japanese PDF font
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+
       - name: fmt
         run: cargo fmt --all --check
 
@@ -43,6 +46,9 @@ jobs:
       - name: test
         run: cargo test --workspace
 
+      - name: openapi snapshot is current
+        run: cargo run --quiet -p api --bin openapi -- --check
+
       # DDL は「空 DB に適用できる」だけでは足りない。
       # RLS / 権限 / 分区 / ジョブ取り出しまで確認する（detail/05 §5.1）。
       - name: db verification
@@ -51,6 +57,66 @@ jobs:
           PGPORT: "5432"
           PGUSER: postgres
         run: ./scripts/verify-db.sh
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: install
+        working-directory: apps/web
+        run: npm ci
+
+      - name: i18n keys
+        working-directory: apps/web
+        run: npm run check:i18n
+
+      - name: build
+        working-directory: apps/web
+        run: npm run build
+
+  runner:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: unit
+        working-directory: workers/runner
+        run: node --test
+
+  oasdiff:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: install oasdiff
+        run: go install github.com/oasdiff/oasdiff@latest
+
+      - name: breaking changes
+        run: |
+          git fetch origin "${{ github.base_ref }}" --depth=1
+          if git show FETCH_HEAD:contracts/api/openapi.json > /tmp/base-openapi.json 2>/dev/null; then
+            "$(go env GOPATH)/bin/oasdiff" breaking /tmp/base-openapi.json contracts/api/openapi.json
+          else
+            echo "base spec が無いため初回のみスキップ（生成 spec の一致は rust ジョブで検査済み）"
+          fi
 
   docs:
     runs-on: ubuntu-latest
