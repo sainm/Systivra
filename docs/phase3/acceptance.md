@@ -81,6 +81,19 @@ Neo4j: `bolt://localhost:7687`（ローカル Community。認証は開発用で�
 
 ---
 
+### 2.6 投影運用の追補（2026-11-08 / `scripts/phase3-graph-ops-eval.py`）
+
+| 項目 | 実測 |
+|---|---|
+| 影ラベル再構築（G-06） | 17 ノード / 12 辺。BUILDING 中も旧 `:Entity` で読み取り可。検証差分 0 で SWITCHED、影ラベル残 0 |
+| ABORT（G-07） | 構築中に `rebuild/abort` → 応答 ABORTED、Neo4j ノード数は旧 17 のまま、影ラベル残 0 |
+| 差分追従 | 再構築後に base_seq 以降の outbox を `:Entity` へ再適用（冪等 MERGE）。PG / Neo4j 件数一致 |
+| 日次漂流（G-09） | 起動時チェックで drift 0。`:Entity` を 1 件削除 → 次回起動で degraded=true、監査 `graph.drift.detected` 1 件。再構築で復旧 |
+| 複数 projector | `locked_by` / `locked_until` + `SKIP LOCKED`。2 worker が 29 イベントを 4 / 25 で分担、dead letter 0、PG / Neo4j 件数一致。stale lock（`locked_until` 過去）は再取得された |
+| 完全性表示 | `GET /graph/stats` に未消費イベント数・直近 drift・最終再構築を追加。UI（1440 / 607）で 9 チップ、pageerror 0 |
+
+---
+
 ## 3. 実装済み範囲
 
 | 領域 | 実装 |
@@ -102,12 +115,12 @@ Neo4j: `bolt://localhost:7687`（ローカル Community。認証は開発用で�
 
 | 項目 | 状態 | 理由 / 次の扱い |
 |---|---|---|
-| 影ラベルによる無停止再構築（I-5） | **降格** | 現状は in-place。再構築中は読み取りが一時的に欠ける。`projection_build.shadow_label='in-place'`。影ラベル・差分追従・VERIFYING / SWITCHED / ABORT は未実装 |
-| 日次漂流検出 | **未実施** | `GET /graph/stats` のオンデマンド比較のみ。日次バッチ、警報、ホームの「グラフ完全性」表示は未実装 |
+| 影ラベルによる無停止再構築（I-5） | **実装** | 影ラベル `Entity__<8hex>` に構築 → 差分追従 → 検証（差分 0）→ ラベル入替。BUILDING / VERIFYING / SWITCHED / FAILED / ABORTED を `projection_build` に残す。`POST /graph/rebuild/abort` で中止でき、旧グラフは無傷（G-06 / G-07 を実測） |
+| 日次漂流検出 | **実装** | worker が起動時 + 24 時間ごとに PG / Neo4j の件数を比較し `graph_meta.projection_drift` に記録。劣化時は監査 `graph.drift.detected`。`GET /graph/stats` が未消費イベント数・直近 drift・最終再構築を返し、グラフ画面に表示（G-09 を実測） |
 | 投影器 10 分停止 | **未実施** | 3 秒停止で代替。10 分間のイベント蓄積と復旧は未検証 |
 | 1,000 実体 / 84 万ノードの負荷 | **未実施** | 10 万ノードの PG lite 隣接のみ合成データで実測。Neo4j 側の 10 万ノード投影は未実施 |
-| 複数 projector の並走 | **未実施** | worker は単一。`FOR UPDATE SKIP LOCKED` と複数プロセスでの重複・欠落試験は未実施 |
-| UNWIND バッチ投影 | **未実装** | 1 イベント 1 クエリ。大規模時のスループットは未測定 |
+| 複数 projector の並走 | **実装** | outbox に `locked_by` / `locked_until` を追加し、`FOR UPDATE SKIP LOCKED` の claim リースで配る。2 worker 並走で重複・欠落 0、stale lock の再取得を実測 |
+| UNWIND バッチ投影 | **実装済み** | 1,000 件ずつ `UNWIND`（`apply_entities_as` / `apply_relationships_as`） |
 | 改版切替の tombstone | **未実装** | `DocumentRevisionSuperseded` は未実装。Phase 1 の改版履歴（`/revisions`）が未実装のため、版切替を起こせない。`revision` / `valid_to` の列と削除時の `valid_to` 閉止のみ実装 |
 | chunk の投影 | **設計どおり対象外** | I-3 により chunk は投影しない。Phase 3 受入文の「Document/Section/Chunk」は chunk を除く構造実体として解釈 |
 | Ontology の型編集 | **未実装** | 閲覧 + 公開のみ。型の追加・属性編集・関係マトリクスは未実装 |

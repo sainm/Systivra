@@ -71,6 +71,7 @@ export function SearchPage({
   const [searchParams, setSearchParams] = useSearchParams();
   const initialQuery = searchParams.get("q") ?? "";
   const initialType = (searchParams.get("type") as DocType | null) ?? "";
+  const revisionFilter = searchParams.get("revision") ?? "";
   const [query, setQuery] = useState(initialQuery);
   const [docType, setDocType] = useState<DocType | "">(initialType);
   const [inspect, setInspect] = useState(searchParams.get("inspect") === "1");
@@ -103,7 +104,7 @@ export function SearchPage({
       triggerRef.current = null;
 
       const useRerank = options?.rerank ?? false;
-      const key = `${pid}\u0000${type}\u0000${trimmed}\u0000${useRerank ? "rerank" : "plain"}`;
+      const key = `${pid}\u0000${type}\u0000${trimmed}\u0000${revisionFilter}\u0000${useRerank ? "rerank" : "plain"}`;
       const cached = searchCache.get(key);
       if (!options?.force && cached && Date.now() - cached.at < SEARCH_CACHE_TTL_MS) {
         setResponse(cached.response);
@@ -115,7 +116,10 @@ export function SearchPage({
         request = search(pid, {
           query: trimmed,
           mode: "hybrid",
-          filters: type ? { doc_types: [type] } : {},
+          filters: {
+            ...(type ? { doc_types: [type] } : {}),
+            ...(revisionFilter ? { revision_id: revisionFilter } : {}),
+          },
           top_k: 12,
           include: ["locator", "quote", "scores"],
           rerank: useRerank,
@@ -242,6 +246,11 @@ export function SearchPage({
 
       <form className="panel panel-body search-form" onSubmit={submit}>
         <div className="filters">
+          {revisionFilter ? (
+            <span className="chip chip-accent" title={revisionFilter}>
+              {t("search.revisionScoped")}: {revisionFilter.slice(0, 8)}
+            </span>
+          ) : null}
           <input
             className="input search-query"
             placeholder={t("search.placeholder")}

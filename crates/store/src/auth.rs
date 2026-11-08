@@ -253,6 +253,41 @@ impl Store {
         Ok(result.rows_affected() > 0)
     }
 
+    /// 共有（PG）レート制限。固定窓のカウントを原子的に進める。
+    /// 戻り値は (窓内カウント, 窓終了までの秒数)。
+    pub async fn hit_rate_limit(
+        &self,
+        tx: &mut Tx<'_>,
+        key: &str,
+        window_seconds: i64,
+    ) -> Result<(i64, i64), StoreError> {
+        let row = sqlx::query(
+            "INSERT INTO core.rate_limit_bucket AS b (bucket_key, window_start, count)
+             VALUES ($1, now(), 1)
+             ON CONFLICT (bucket_key) DO UPDATE
+                SET count = CASE
+                        WHEN b.window_start < now() - make_interval(secs => $2) THEN 1
+                        ELSE b.count + 1
+                    END,
+                    window_start = CASE
+                        WHEN b.window_start < now() - make_interval(secs => $2) THEN now()
+                        ELSE b.window_start
+                    END
+             RETURNING count::bigint AS count,
+                       GREATEST(
+                           1,
+                           ceil(EXTRACT(EPOCH FROM (
+                               window_start + make_interval(secs => $2) - now()
+                           )))::bigint
+                       ) AS retry_after",
+        )
+        .bind(key)
+        .bind(window_seconds as f64)
+        .fetch_one(&mut **tx)
+        .await?;
+        Ok((row.get("count"), row.get("retry_after")))
+    }
+
     /// 現在のセッション以外を全て失効させる。
     pub async fn revoke_other_sessions(
         &self,

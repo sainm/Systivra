@@ -137,7 +137,7 @@ def stop(proc):
         proc.kill()
 
 
-def start_api(port, oidc=True, rate_capacity=None, rate_refill=None):
+def start_api(port, oidc=True, rate_capacity=None, rate_refill=None, backend=None):
     env = dict(
         os.environ,
         DATABASE_URL=f"postgres://systivra_app@{PGHOST}:5432/{DB}",
@@ -166,6 +166,8 @@ def start_api(port, oidc=True, rate_capacity=None, rate_refill=None):
         env["AUTH_RATE_LIMIT_CAPACITY"] = str(rate_capacity)
     if rate_refill is not None:
         env["AUTH_RATE_LIMIT_REFILL_PER_MIN"] = str(rate_refill)
+    if backend is not None:
+        env["AUTH_RATE_LIMIT_BACKEND"] = backend
     log = open(f"/tmp/systivra-sso-api-{port}.log", "w")
     proc = subprocess.Popen(
         [str(API_BIN)], env=env, stdout=log, stderr=subprocess.STDOUT
@@ -302,6 +304,131 @@ def main():
             "SCIM Group を作成しロールを付与",
             status in (200, 201),
             f"{status} {raw[:80]!r}",
+        )
+        group = json.loads(raw) if status in (200, 201) else {}
+        group_id = group.get("id")
+        status, headers, raw = http(
+            "GET",
+            f"http://127.0.0.1:{API_PORT}/scim/v2/Groups/{group_id}",
+            headers=scim_headers,
+        )
+        etag = headers.get("ETag")
+        check(
+            "SCIM Group の GET が ETag と meta.version を返す",
+            status == 200 and etag and json.loads(raw)["meta"].get("version") == etag,
+            f"{status} etag={etag}",
+        )
+        status, _, _ = http(
+            "GET",
+            f"http://127.0.0.1:{API_PORT}/scim/v2/Groups/{group_id}",
+            headers={**scim_headers, "If-None-Match": etag or ""},
+        )
+        check("If-None-Match 一致は 304", status == 304, str(status))
+        status, _, _ = http(
+            "PUT",
+            f"http://127.0.0.1:{API_PORT}/scim/v2/Groups/{group_id}",
+            body=json.dumps({"displayName": "systivra-admins"}).encode(),
+            headers={
+                **scim_headers,
+                "Content-Type": "application/json",
+                "If-Match": 'W/"deadbeefdeadbeef"',
+            },
+        )
+        check("If-Match 不一致の PUT は 412", status == 412, str(status))
+        status, _, raw = http(
+            "PATCH",
+            f"http://127.0.0.1:{API_PORT}/scim/v2/Groups/{group_id}",
+            body=json.dumps(
+                {
+                    "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+                    "Operations": [
+                        {"op": "remove", "path": "members", "value": [{"value": USER_ID}]}
+                    ],
+                }
+            ).encode(),
+            headers={**scim_headers, "Content-Type": "application/json"},
+        )
+        role = psql(
+            f"SELECT role || '|' || role_source FROM core.project_member "
+            f"WHERE user_id='{USER_ID}' AND project_id=core.first_project();"
+        )
+        check(
+            "Groups PATCH remove で SCIM 由来ロールが VIEWER へ降格",
+            status == 200 and role == "VIEWER|SCIM",
+            f"{status} {role}",
+        )
+        status, _, raw = http(
+            "POST",
+            f"http://127.0.0.1:{API_PORT}/scim/v2/Bulk",
+            body=json.dumps(
+                {
+                    "schemas": ["urn:ietf:params:scim:api:messages:2.0:BulkRequest"],
+                    "Operations": [
+                        {
+                            "method": "POST",
+                            "path": "/Users",
+                            "bulkId": "u1",
+                            "data": {"userName": "scim-eval", "displayName": "SCIM Eval"},
+                        },
+                        {
+                            "method": "PATCH",
+                            "path": f"/Groups/{group_id}",
+                            "data": {
+                                "Operations": [
+                                    {"op": "add", "path": "members", "value": [{"value": USER_ID}]}
+                                ]
+                            },
+                        },
+                    ],
+                }
+            ).encode(),
+            headers={**scim_headers, "Content-Type": "application/json"},
+        )
+        bulk = json.loads(raw) if status == 200 else {}
+        role = psql(
+            f"SELECT role FROM core.project_member "
+            f"WHERE user_id='{USER_ID}' AND project_id=core.first_project();"
+        )
+        check(
+            "SCIM Bulk が 2 操作を順に実行（ユーザー作成 + メンバー復帰）",
+            status == 200
+            and [op.get("status") for op in bulk.get("Operations", [])] == ["201", "200"]
+            and role == "ARCHITECT",
+            f"{status} {raw[:160]!r}",
+        )
+        status, _, raw = http(
+            "POST",
+            f"http://127.0.0.1:{API_PORT}/scim/v2/Bulk",
+            body=json.dumps(
+                {
+                    "failOnErrors": 1,
+                    "Operations": [
+                        {"method": "PATCH", "path": "/Nope", "data": {}},
+                        {
+                            "method": "PATCH",
+                            "path": f"/Groups/{group_id}",
+                            "data": {
+                                "Operations": [
+                                    {"op": "remove", "path": "members", "value": [{"value": USER_ID}]}
+                                ]
+                            },
+                        },
+                    ],
+                }
+            ).encode(),
+            headers={**scim_headers, "Content-Type": "application/json"},
+        )
+        failed_bulk = json.loads(raw) if status == 200 else {}
+        role = psql(
+            f"SELECT role FROM core.project_member "
+            f"WHERE user_id='{USER_ID}' AND project_id=core.first_project();"
+        )
+        check(
+            "Bulk の failOnErrors=1 は失敗後に残りを実行しない",
+            status == 200
+            and len(failed_bulk.get("Operations", [])) == 1
+            and role == "ARCHITECT",
+            f"{status} {raw[:160]!r}",
         )
 
         auth_url = start_flow(f"http://127.0.0.1:{API_PORT}")
@@ -459,6 +586,38 @@ def main():
             location,
         )
 
+        auth_url = start_flow(f"http://127.0.0.1:{API_PORT}")
+        callback(authorize(auth_url))
+        sid = psql(
+            f"SELECT idp_sid FROM core.session WHERE provider='{ISSUER}' "
+            "AND idp_sid IS NOT NULL ORDER BY created_at DESC LIMIT 1;"
+        )
+        status, _, _ = http(
+            "GET",
+            f"http://127.0.0.1:{API_PORT}/api/v1/auth/oidc/frontchannel-logout"
+            f"?iss={urllib.parse.quote('https://wrong.example', safe='')}&sid={sid}",
+        )
+        check("front-channel logout は iss 不一致で 400", status == 400, str(status))
+        status, _, _ = http(
+            "GET",
+            f"http://127.0.0.1:{API_PORT}/api/v1/auth/oidc/frontchannel-logout"
+            f"?iss={urllib.parse.quote(ISSUER, safe='')}&sid={urllib.parse.quote(sid, safe='')}",
+        )
+        check("front-channel logout が 200", status == 200, str(status))
+        status, _, _ = http("GET", f"http://127.0.0.1:{API_PORT}/api/v1/auth/me")
+        check("front-channel logout 後の /me は 401", status == 401, str(status))
+        rows = audit_rows()
+        front_lines = psql(
+            "SELECT result || '|' || COALESCE(detail->>'reason','') "
+            "FROM core.audit_log WHERE action='auth.sso.frontchannel_logout' "
+            "ORDER BY id DESC LIMIT 5;"
+        ).splitlines()
+        check(
+            "front-channel logout が監査に残る",
+            any(line.split("|", 1)[0] == "SUCCESS" for line in front_lines),
+            "auth.sso.frontchannel_logout",
+        )
+
         status, _, raw = http(
             "POST",
             f"{ISSUER}/logout-token",
@@ -548,6 +707,50 @@ def main():
             last_status == 429 and (last_headers.get("Retry-After") or "").isdigit(),
             f"{last_status} Retry-After={last_headers.get('Retry-After')}",
         )
+
+        shared_a = shared_b = None
+        try:
+            psql("DELETE FROM core.rate_limit_bucket;")
+            shared_a = start_api(
+                18101, oidc=False, rate_capacity=6, rate_refill=1, backend="pg"
+            )
+            shared_b = start_api(
+                18102, oidc=False, rate_capacity=6, rate_refill=1, backend="pg"
+            )
+            body = json.dumps({"login_id": "alice", "password": "wrong-password"}).encode()
+            results = []
+            for port in (18101, 18101, 18101, 18102, 18102, 18102):
+                results.append(
+                    http(
+                        "POST",
+                        f"http://127.0.0.1:{port}/api/v1/auth/login",
+                        body=body,
+                        headers={"Content-Type": "application/json"},
+                    )[0]
+                )
+            status_b, headers_b, _ = http(
+                "POST",
+                "http://127.0.0.1:18102/api/v1/auth/login",
+                body=body,
+                headers={"Content-Type": "application/json"},
+            )
+            status_a, _, _ = http(
+                "POST",
+                "http://127.0.0.1:18101/api/v1/auth/login",
+                body=body,
+                headers={"Content-Type": "application/json"},
+            )
+            check(
+                "共有レート制限が 2 API で合算される（3+3 後は両方 429）",
+                all(code == 401 for code in results)
+                and status_b == 429
+                and status_a == 429
+                and (headers_b.get("Retry-After") or "").isdigit(),
+                f"{results} b={status_b} a={status_a}",
+            )
+        finally:
+            stop(shared_a)
+            stop(shared_b)
 
         audit = psql(
             "SELECT result || '|' || count(*) FROM core.audit_log "

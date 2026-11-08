@@ -3,14 +3,23 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import type { MessageKey } from "../i18n";
 import { useT } from "../i18n";
 import {
+  activateDocumentRevision,
   deleteDocument,
+  documentRevisionContentUrl,
   getDocument,
   getJob,
+  listDocumentRevisions,
   parseDocument,
 } from "../lib/api";
 import { useAsyncAction } from "../lib/useAsyncAction";
 import { formatBytes, formatDate } from "../lib/format";
-import type { DocumentDetail, JobResponse, Me, Membership } from "../lib/types";
+import type {
+  DocumentDetail,
+  JobResponse,
+  Me,
+  Membership,
+  RevisionSummary,
+} from "../lib/types";
 import { AppShell } from "../components/AppShell";
 import { EmptyState, ErrorNotice, JobStrip, Modal, StatusBadge, statusText } from "../components/ui";
 import { PdfViewer } from "../pdf/PdfViewer";
@@ -31,6 +40,8 @@ export function DocumentPage({
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [document, setDocument] = useState<DocumentDetail | null>(null);
+  const [revisions, setRevisions] = useState<RevisionSummary[]>([]);
+  const [activating, setActivating] = useState("");
   const { loading, error, run: runLoad, setError } = useAsyncAction();
   const [job, setJob] = useState<JobResponse | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -54,8 +65,14 @@ export function DocumentPage({
 
   const load = useCallback(async () => {
     await runLoad(async (isCurrent) => {
-      const loaded = await getDocument(did);
-      if (isCurrent()) setDocument(loaded);
+      const [loaded, history] = await Promise.all([
+        getDocument(did),
+        listDocumentRevisions(did),
+      ]);
+      if (isCurrent()) {
+        setDocument(loaded);
+        setRevisions(history.items);
+      }
     });
   }, [did, runLoad]);
 
@@ -77,6 +94,23 @@ export function DocumentPage({
       await load();
     } catch (cause) {
       setError(cause);
+    }
+  }
+
+  async function activateRevision(revisionId: string) {
+    setActivating(revisionId);
+    try {
+      const history = await activateDocumentRevision(
+        membership.project_id,
+        did,
+        revisionId,
+      );
+      setRevisions(history.items);
+      setDocument(await getDocument(did));
+    } catch (cause) {
+      setError(cause);
+    } finally {
+      setActivating("");
     }
   }
 
@@ -148,6 +182,74 @@ export function DocumentPage({
         </div>
       ) : null}
       {job ? <JobStrip job={job} /> : null}
+
+      <section className="panel panel-body section-gap stack">
+        <h2 className="panel-title">{t("document.revisions")}</h2>
+        {revisions.length === 0 ? (
+          <p className="muted">{t("document.noRevisions")}</p>
+        ) : (
+          <div className="table-scroll">
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>{t("document.revisionId")}</th>
+                  <th>{t("document.revisionSource")}</th>
+                  <th>{t("document.revisionStatus")}</th>
+                  <th>{t("documents.colChunks")}</th>
+                  <th>{t("document.revisionAcquired")}</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {revisions.map((item) => (
+                  <tr key={item.id} className="revision-row">
+                    <td className="num">{item.id.slice(0, 8)}</td>
+                    <td>{item.source_revision ?? "-"}</td>
+                    <td>
+                      <span
+                        className={
+                          item.status === "CURRENT" ? "chip chip-success" : "chip"
+                        }
+                      >
+                        {item.status}
+                      </span>
+                    </td>
+                    <td className="num">{item.chunk_count}</td>
+                    <td className="num">{formatDate(item.acquired_at, lang)}</td>
+                    <td>
+                      <span className="row row-wrap">
+                        <a
+                          className="btn btn-sm"
+                          href={documentRevisionContentUrl(did, item.id)}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {t("document.revisionOriginal")}
+                        </a>
+                        <Link
+                          className="btn btn-sm"
+                          to={`/projects/${membership.project_id}/search?revision=${item.id}`}
+                        >
+                          {t("document.revisionSearch")}
+                        </Link>
+                        {item.status !== "CURRENT" ? (
+                          <button
+                            className="btn btn-sm"
+                            disabled={activating !== ""}
+                            onClick={() => void activateRevision(item.id)}
+                          >
+                            {t("document.revisionActivate")}
+                          </button>
+                        ) : null}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
 
       {loading ? (
         <div className="panel panel-body stack">

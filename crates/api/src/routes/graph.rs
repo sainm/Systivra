@@ -6,9 +6,10 @@ use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use contracts::{
     ErrorCode, GraphEntityQuery, GraphEntitySearchResponse, GraphNeighborsQuery,
-    GraphNeighborsResponse, GraphPathQuery, GraphPathResponse, GraphRebuildResponse,
-    GraphStatsResponse, GraphSubgraphQuery, GraphSubgraphResponse, GraphTraceabilityQuery,
-    OntologyResponse, PublishOntologyRequest, PublishOntologyResponse, TraceabilityResponse,
+    GraphNeighborsResponse, GraphPathQuery, GraphPathResponse, GraphRebuildAbortResponse,
+    GraphRebuildResponse, GraphStatsResponse, GraphSubgraphQuery, GraphSubgraphResponse,
+    GraphTraceabilityQuery, OntologyResponse, PublishOntologyRequest, PublishOntologyResponse,
+    TraceabilityResponse,
 };
 use uuid::Uuid;
 
@@ -37,6 +38,10 @@ pub fn router() -> Router<ApiState> {
         )
         .route("/api/v1/projects/{pid}/graph/stats", get(stats))
         .route("/api/v1/projects/{pid}/graph/rebuild", post(rebuild))
+        .route(
+            "/api/v1/projects/{pid}/graph/rebuild/abort",
+            post(rebuild_abort),
+        )
 }
 
 #[utoipa::path(
@@ -296,6 +301,29 @@ pub(crate) async fn rebuild(
     let response = state
         .app
         .graph_rebuild(&auth, scope.project)
+        .await
+        .map_err(|e| ApiError::from_app(e, &trace))?;
+    Ok(Json(response))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{pid}/graph/rebuild/abort",
+    params(("pid" = uuid::Uuid, Path, description = "Project ID")),
+    responses(
+        (status = 200, body = GraphRebuildAbortResponse),
+        (status = 403, body = contracts::Problem)
+    )
+)]
+pub(crate) async fn rebuild_abort(
+    State(state): State<ApiState>,
+    scope: ProjectScope,
+    Extension(trace): Extension<TraceId>,
+    Extension(auth): Extension<Authenticated>,
+) -> Result<Json<GraphRebuildAbortResponse>, ApiError> {
+    let response = state
+        .app
+        .graph_abort_rebuild(&auth, scope.project)
         .await
         .map_err(|e| ApiError::from_app(e, &trace))?;
     Ok(Json(response))

@@ -1,11 +1,23 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 use sqlx::Row;
 use uuid::Uuid;
 
 use crate::knowledge::NodeDraft;
+
+#[derive(Debug, Clone)]
+pub struct NewProjectionDrift {
+    pub project_id: Uuid,
+    pub pg_nodes: i64,
+    pub pg_relationships: i64,
+    pub neo4j_nodes: i64,
+    pub neo4j_relationships: i64,
+    pub drift_rate: f64,
+    pub degraded: bool,
+}
 use crate::pool::{Store, StoreError, Tx};
 
 #[derive(Debug, Clone)]
@@ -185,18 +197,26 @@ impl Store {
             .collect())
     }
 
-    pub async fn pending_graph_events(
+    pub async fn claim_graph_events(
         &self,
         tx: &mut Tx<'_>,
+        worker_id: &str,
         limit: i64,
     ) -> Result<Vec<OutboxEvent>, StoreError> {
         let rows = sqlx::query(
-            "SELECT event_id, seq, event_type, payload
-               FROM core.outbox_event
-              WHERE published_at IS NULL AND NOT dead_letter
-              ORDER BY seq
-              LIMIT $1",
+            "UPDATE core.outbox_event o
+                SET locked_by = $1,
+                    locked_until = now() + interval '5 minutes'
+              WHERE o.event_id IN (
+                    SELECT event_id FROM core.outbox_event
+                     WHERE published_at IS NULL AND NOT dead_letter
+                       AND (locked_until IS NULL OR locked_until < now())
+                     ORDER BY seq
+                     LIMIT $2
+                     FOR UPDATE SKIP LOCKED)
+              RETURNING o.event_id, o.seq, o.event_type, o.payload",
         )
+        .bind(worker_id)
         .bind(limit)
         .fetch_all(&mut **tx)
         .await?;
@@ -218,7 +238,7 @@ impl Store {
     ) -> Result<(), StoreError> {
         sqlx::query(
             "UPDATE core.outbox_event
-                SET published_at = now()
+                SET published_at = now(), locked_by = NULL, locked_until = NULL
               WHERE event_id = $1 AND published_at IS NULL",
         )
         .bind(event_id)
@@ -237,7 +257,9 @@ impl Store {
             "UPDATE core.outbox_event
                 SET attempts = attempts + 1,
                     last_error = $2,
-                    dead_letter = (attempts + 1 >= 3)
+                    dead_letter = (attempts + 1 >= 3),
+                    locked_by = NULL,
+                    locked_until = NULL
               WHERE event_id = $1
               RETURNING attempts, dead_letter",
         )
@@ -998,6 +1020,233 @@ impl Store {
         Ok((row.get("nodes"), row.get("rels")))
     }
 
+    pub async fn list_project_ids(&self, tx: &mut Tx<'_>) -> Result<Vec<Uuid>, StoreError> {
+        let rows = sqlx::query("SELECT id FROM core.project ORDER BY id")
+            .fetch_all(&mut **tx)
+            .await?;
+        Ok(rows.iter().map(|row| row.get("id")).collect())
+    }
+
+    pub async fn pending_event_count(
+        &self,
+        tx: &mut Tx<'_>,
+        project_id: Uuid,
+    ) -> Result<i64, StoreError> {
+        let row = sqlx::query(
+            "SELECT count(*) AS n FROM core.outbox_event
+              WHERE published_at IS NULL AND NOT dead_letter
+                AND payload->>'project_id' = $1",
+        )
+        .bind(project_id.to_string())
+        .fetch_one(&mut **tx)
+        .await?;
+        Ok(row.get("n"))
+    }
+
+    pub async fn insert_projection_drift(
+        &self,
+        tx: &mut Tx<'_>,
+        drift: &NewProjectionDrift,
+    ) -> Result<(), StoreError> {
+        sqlx::query(
+            "INSERT INTO graph_meta.projection_drift
+               (project_id, pg_nodes, pg_relationships, neo4j_nodes,
+                neo4j_relationships, drift_rate, degraded)
+             VALUES ($1,$2,$3,$4,$5,$6,$7)",
+        )
+        .bind(drift.project_id)
+        .bind(drift.pg_nodes)
+        .bind(drift.pg_relationships)
+        .bind(drift.neo4j_nodes)
+        .bind(drift.neo4j_relationships)
+        .bind(drift.drift_rate)
+        .bind(drift.degraded)
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn latest_projection_drift(
+        &self,
+        tx: &mut Tx<'_>,
+        project_id: Uuid,
+    ) -> Result<Option<(DateTime<Utc>, f64, bool, i64, i64, i64, i64)>, StoreError> {
+        let row = sqlx::query(
+            "SELECT checked_at, drift_rate::float8 AS drift_rate, degraded, pg_nodes,
+                    pg_relationships, neo4j_nodes, neo4j_relationships
+               FROM graph_meta.projection_drift
+              WHERE project_id = $1
+              ORDER BY checked_at DESC, id DESC
+              LIMIT 1",
+        )
+        .bind(project_id)
+        .fetch_optional(&mut **tx)
+        .await?;
+        Ok(row.as_ref().map(|row| {
+            (
+                row.get("checked_at"),
+                row.get("drift_rate"),
+                row.get("degraded"),
+                row.get("pg_nodes"),
+                row.get("pg_relationships"),
+                row.get("neo4j_nodes"),
+                row.get("neo4j_relationships"),
+            )
+        }))
+    }
+
+    pub async fn create_projection_build(
+        &self,
+        tx: &mut Tx<'_>,
+        build_id: Uuid,
+        project_id: Uuid,
+        shadow_label: &str,
+        base_event_seq: i64,
+    ) -> Result<(), StoreError> {
+        sqlx::query(
+            "INSERT INTO graph_meta.projection_build
+               (build_id, project_id, status, shadow_label, base_event_seq)
+             VALUES ($1, $2, 'BUILDING', $3, $4)",
+        )
+        .bind(build_id)
+        .bind(project_id)
+        .bind(shadow_label)
+        .bind(base_event_seq)
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn update_projection_build(
+        &self,
+        tx: &mut Tx<'_>,
+        build_id: Uuid,
+        status: &str,
+        entities_written: i64,
+        relationships_written: i64,
+        drift_rate: Option<f64>,
+    ) -> Result<(), StoreError> {
+        sqlx::query(
+            "UPDATE graph_meta.projection_build
+                SET status = $2,
+                    entities_written = $3,
+                    relationships_written = $4,
+                    drift_rate = $5,
+                    finished_at = CASE
+                        WHEN $2 IN ('SWITCHED','FAILED','ABORTED','READY') THEN now()
+                        ELSE finished_at
+                    END
+              WHERE build_id = $1",
+        )
+        .bind(build_id)
+        .bind(status)
+        .bind(entities_written)
+        .bind(relationships_written)
+        .bind(drift_rate)
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn projection_build_status(
+        &self,
+        tx: &mut Tx<'_>,
+        build_id: Uuid,
+    ) -> Result<Option<String>, StoreError> {
+        let row = sqlx::query("SELECT status FROM graph_meta.projection_build WHERE build_id = $1")
+            .bind(build_id)
+            .fetch_optional(&mut **tx)
+            .await?;
+        Ok(row.map(|row| row.get("status")))
+    }
+
+    pub async fn latest_projection_build(
+        &self,
+        tx: &mut Tx<'_>,
+        project_id: Uuid,
+    ) -> Result<
+        Option<(
+            Uuid,
+            String,
+            String,
+            Option<f64>,
+            i64,
+            i64,
+            Option<DateTime<Utc>>,
+        )>,
+        StoreError,
+    > {
+        let row = sqlx::query(
+            "SELECT build_id, status, shadow_label, drift_rate::float8 AS drift_rate,
+                    entities_written, relationships_written, finished_at
+               FROM graph_meta.projection_build
+              WHERE project_id = $1
+              ORDER BY started_at DESC
+              LIMIT 1",
+        )
+        .bind(project_id)
+        .fetch_optional(&mut **tx)
+        .await?;
+        Ok(row.as_ref().map(|row| {
+            (
+                row.get("build_id"),
+                row.get("status"),
+                row.get("shadow_label"),
+                row.get::<Option<f64>, _>("drift_rate"),
+                row.get("entities_written"),
+                row.get("relationships_written"),
+                row.get("finished_at"),
+            )
+        }))
+    }
+
+    pub async fn abort_projection_build(
+        &self,
+        tx: &mut Tx<'_>,
+        project_id: Uuid,
+    ) -> Result<Option<(Uuid, String)>, StoreError> {
+        let row = sqlx::query(
+            "UPDATE graph_meta.projection_build
+                SET status = 'ABORTED', finished_at = now()
+              WHERE project_id = $1 AND status IN ('BUILDING','VERIFYING','READY')
+              RETURNING build_id, shadow_label",
+        )
+        .bind(project_id)
+        .fetch_optional(&mut **tx)
+        .await?;
+        Ok(row.map(|row| (row.get("build_id"), row.get("shadow_label"))))
+    }
+
+    pub async fn graph_events_after(
+        &self,
+        tx: &mut Tx<'_>,
+        project_id: Uuid,
+        after_seq: i64,
+        limit: i64,
+    ) -> Result<Vec<OutboxEvent>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT event_id, seq, event_type, payload
+               FROM core.outbox_event
+              WHERE seq > $2 AND payload->>'project_id' = $1
+              ORDER BY seq
+              LIMIT $3",
+        )
+        .bind(project_id.to_string())
+        .bind(after_seq)
+        .bind(limit)
+        .fetch_all(&mut **tx)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|row| OutboxEvent {
+                event_id: row.get("event_id"),
+                seq: row.get("seq"),
+                event_type: row.get("event_type"),
+                payload: row.get("payload"),
+            })
+            .collect())
+    }
+
     pub async fn published_ontology_version(&self, tx: &mut Tx<'_>) -> Result<String, StoreError> {
         let row = sqlx::query(
             "SELECT version FROM graph_meta.ontology_version
@@ -1181,4 +1430,61 @@ fn node_name(node: &NodeDraft) -> String {
         return format!("{} p.{page}", node.node_type);
     }
     format!("{} #{}", node.node_type, node.ordinal + 1)
+}
+
+impl Store {
+    /// 改版切替: 旧 revision のグラフ実体を tombstone し、
+    /// projector 向けに `DocumentRevisionSuperseded` を積む。
+    pub async fn supersede_document_revision(
+        &self,
+        tx: &mut Tx<'_>,
+        project_id: Uuid,
+        document_id: Uuid,
+        old_revision: Uuid,
+        new_revision: Uuid,
+    ) -> Result<u64, StoreError> {
+        let result = sqlx::query(
+            "UPDATE graph_meta.entity
+                SET deleted_at = now()
+              WHERE project_id = $1 AND revision = $2
+                AND properties->>'document_id' = $3",
+        )
+        .bind(project_id)
+        .bind(old_revision.to_string())
+        .bind(document_id.to_string())
+        .execute(&mut **tx)
+        .await?;
+        sqlx::query(
+            "UPDATE graph_meta.relationship r
+                SET valid_to = now()
+              WHERE r.project_id = $1 AND r.valid_to IS NULL
+                AND (r.src_id IN (SELECT id FROM graph_meta.entity
+                                   WHERE project_id = $1 AND revision = $2
+                                     AND properties->>'document_id' = $3)
+                  OR r.dst_id IN (SELECT id FROM graph_meta.entity
+                                   WHERE project_id = $1 AND revision = $2
+                                     AND properties->>'document_id' = $3))",
+        )
+        .bind(project_id)
+        .bind(old_revision.to_string())
+        .bind(document_id.to_string())
+        .execute(&mut **tx)
+        .await?;
+        let payload = json!({
+            "project_id": project_id,
+            "document_id": document_id,
+            "old_revision": old_revision.to_string(),
+            "new_revision": new_revision.to_string(),
+            "seq": 0,
+        });
+        self.append_graph_event(
+            tx,
+            "revision",
+            document_id,
+            "DocumentRevisionSuperseded",
+            &payload,
+        )
+        .await?;
+        Ok(result.rows_affected())
+    }
 }

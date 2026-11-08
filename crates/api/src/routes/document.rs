@@ -8,7 +8,8 @@ use chrono::Utc;
 use contracts::{
     AuditListResponse, BulkImportRequest, BulkImportResponse, DocumentChunkListResponse,
     DocumentChunkQuery, DocumentDetail, DocumentListQuery, DocumentListResponse, ErrorCode,
-    RegisterDocumentRequest, TreeQuery, TreeResponse, UploadUrlRequest, UploadUrlResponse,
+    RegisterDocumentRequest, RegisterRevisionResponse, RevisionListResponse, TreeQuery,
+    TreeResponse, UploadUrlRequest, UploadUrlResponse,
 };
 use domain::{DocumentId, Permission, RevisionId};
 
@@ -38,6 +39,22 @@ pub fn resource_router() -> Router<ApiState> {
             get(detail).delete(delete_document),
         )
         .route("/api/v1/documents/{did}/content", get(content))
+        .route(
+            "/api/v1/documents/{did}/revisions",
+            get(list_document_revisions),
+        )
+        .route(
+            "/api/v1/documents/{did}/revisions/{rid}/content",
+            get(revision_content),
+        )
+        .route(
+            "/api/v1/projects/{pid}/documents/{did}/revisions",
+            post(register_revision),
+        )
+        .route(
+            "/api/v1/projects/{pid}/documents/{did}/revisions/{rid_activate}",
+            post(activate_revision),
+        )
         .route("/api/v1/documents/{did}/tree", get(tree))
         .route("/api/v1/documents/{did}/chunks", get(chunks))
         .route("/api/v1/documents/{did}/revisions/{rid_parse}", post(parse))
@@ -92,6 +109,144 @@ pub(crate) async fn create_upload_url(
             max_size_bytes: app::MAX_UPLOAD_BYTES as i64,
         }),
     ))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{pid}/documents/{did}/revisions",
+    params(
+        ("pid" = uuid::Uuid, Path, description = "Project ID"),
+        ("did" = uuid::Uuid, Path, description = "Document ID")
+    ),
+    request_body = RegisterDocumentRequest,
+    responses(
+        (status = 201, body = RegisterRevisionResponse),
+        (status = 400, body = contracts::Problem),
+        (status = 403, body = contracts::Problem),
+        (status = 404, body = contracts::Problem),
+        (status = 409, body = contracts::Problem)
+    )
+)]
+pub(crate) async fn register_revision(
+    State(state): State<ApiState>,
+    scope: ProjectScope,
+    Extension(trace): Extension<TraceId>,
+    Extension(auth): Extension<Authenticated>,
+    Path((_pid, did)): Path<(String, String)>,
+    Json(req): Json<RegisterDocumentRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    require_write(scope.role, &trace)?;
+    let document = parse_document(&did, &trace)?;
+    let response = state
+        .app
+        .register_revision(&auth, scope.project, document, req, Some(trace.0.clone()))
+        .await
+        .map_err(|e| ApiError::from_app(e, &trace))?;
+    Ok((StatusCode::CREATED, Json(response)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/documents/{did}/revisions",
+    params(("did" = uuid::Uuid, Path, description = "Document ID")),
+    responses(
+        (status = 200, body = RevisionListResponse),
+        (status = 404, body = contracts::Problem)
+    )
+)]
+pub(crate) async fn list_document_revisions(
+    State(state): State<ApiState>,
+    Extension(trace): Extension<TraceId>,
+    Extension(auth): Extension<Authenticated>,
+    Path(did): Path<String>,
+) -> Result<Json<RevisionListResponse>, ApiError> {
+    let document = parse_document(&did, &trace)?;
+    let response = state
+        .app
+        .list_document_revisions(&auth, document)
+        .await
+        .map_err(|e| ApiError::from_app(e, &trace))?;
+    Ok(Json(response))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/documents/{did}/revisions/{rid}/content",
+    params(
+        ("did" = uuid::Uuid, Path, description = "Document ID"),
+        ("rid" = uuid::Uuid, Path, description = "Revision ID")
+    ),
+    responses((status = 200, description = "Revision content"), (status = 404, body = contracts::Problem))
+)]
+pub(crate) async fn revision_content(
+    State(state): State<ApiState>,
+    Extension(trace): Extension<TraceId>,
+    Extension(auth): Extension<Authenticated>,
+    Path((did, rid)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    let document = parse_document(&did, &trace)?;
+    let revision: RevisionId = rid
+        .parse()
+        .map_err(|_| ApiError::new(ErrorCode::ValidationSchema, &trace))?;
+    let (bytes, mime_type) = state
+        .app
+        .document_revision_content(&auth, document, revision)
+        .await
+        .map_err(|e| ApiError::from_app(e, &trace))?;
+    Ok((
+        StatusCode::OK,
+        [
+            (axum::http::header::CONTENT_TYPE, mime_type),
+            (
+                axum::http::header::CACHE_CONTROL,
+                "private, max-age=60".to_string(),
+            ),
+        ],
+        bytes,
+    ))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{pid}/documents/{did}/revisions/{rid_activate}",
+    params(
+        ("pid" = uuid::Uuid, Path, description = "Project ID"),
+        ("did" = uuid::Uuid, Path, description = "Document ID"),
+        ("rid_activate" = String, Path, description = "Revision ID + ':activate'")
+    ),
+    responses(
+        (status = 200, body = RevisionListResponse),
+        (status = 403, body = contracts::Problem),
+        (status = 404, body = contracts::Problem)
+    )
+)]
+pub(crate) async fn activate_revision(
+    State(state): State<ApiState>,
+    scope: ProjectScope,
+    Extension(trace): Extension<TraceId>,
+    Extension(auth): Extension<Authenticated>,
+    Path((_pid, did, rid_activate)): Path<(String, String, String)>,
+) -> Result<Json<RevisionListResponse>, ApiError> {
+    require_write(scope.role, &trace)?;
+    let document = parse_document(&did, &trace)?;
+    let raw = rid_activate
+        .strip_suffix(":activate")
+        .unwrap_or(&rid_activate);
+    let revision: RevisionId = raw
+        .parse()
+        .map_err(|_| ApiError::new(ErrorCode::ValidationSchema, &trace))?;
+    let response = state
+        .app
+        .activate_document_revision(
+            &auth,
+            scope.project,
+            document,
+            revision,
+            Some(trace.0.clone()),
+        )
+        .await
+        .map_err(|e| ApiError::from_app(e, &trace))?;
+    Ok(Json(response))
 }
 
 #[utoipa::path(

@@ -80,11 +80,12 @@ impl App {
         if let Some(project) = self.store().first_project_id(&mut tx).await? {
             for member in members {
                 self.store()
-                    .upsert_member_role(&mut tx, project, *member, role)
+                    .upsert_member_role(&mut tx, project, *member, role, "SCIM")
                     .await?;
             }
         }
         store::commit(tx).await?;
+        self.reconcile_scim_group_roles().await?;
         Ok(id)
     }
 
@@ -92,6 +93,7 @@ impl App {
         let mut tx = self.store().begin_unscoped().await?;
         let deleted = self.store().delete_scim_group(&mut tx, id).await?;
         store::commit(tx).await?;
+        self.reconcile_scim_group_roles().await?;
         Ok(deleted)
     }
 
@@ -113,7 +115,7 @@ impl App {
     ) -> Result<(), AuthError> {
         let mut tx = self.store().begin_unscoped().await?;
         self.store()
-            .upsert_member_role(&mut tx, project, user, role)
+            .upsert_member_role(&mut tx, project, user, role, "MANUAL")
             .await?;
         store::commit(tx).await?;
         Ok(())
@@ -141,9 +143,53 @@ impl App {
             return Ok(None);
         };
         self.store()
-            .upsert_member_role(&mut tx, project, user, best)
+            .upsert_member_role(&mut tx, project, user, best, "SCIM")
             .await?;
         store::commit(tx).await?;
         Ok(Some(best))
+    }
+
+    /// グループ構成から SCIM 由来のロールを再計算する。
+    /// どのグループにも属さない SCIM 由来メンバーは VIEWER へ降格する
+    /// （OWNER と手動付与は触らない）。
+    pub async fn reconcile_scim_group_roles(&self) -> Result<(), AuthError> {
+        let mut tx = self.store().begin_unscoped().await?;
+        let groups = self.store().list_scim_groups(&mut tx).await?;
+        if groups.is_empty() {
+            store::commit(tx).await?;
+            return Ok(());
+        }
+        let Some(project) = self.store().first_project_id(&mut tx).await? else {
+            store::commit(tx).await?;
+            return Ok(());
+        };
+        let members = self.store().scim_sourced_members(&mut tx, project).await?;
+        let mut best: std::collections::BTreeMap<UserId, Role> = std::collections::BTreeMap::new();
+        for group in &groups {
+            for member in &group.members {
+                let user = member.id;
+                let entry = best.entry(user).or_insert(group.role);
+                if rank(group.role) > rank(*entry) {
+                    *entry = group.role;
+                }
+            }
+        }
+        for (user, current) in members {
+            match best.get(&user) {
+                Some(role) if *role != current => {
+                    self.store()
+                        .upsert_member_role(&mut tx, project, user, *role, "SCIM")
+                        .await?;
+                }
+                None if current != Role::Owner => {
+                    self.store()
+                        .upsert_member_role(&mut tx, project, user, Role::Viewer, "SCIM")
+                        .await?;
+                }
+                _ => {}
+            }
+        }
+        store::commit(tx).await?;
+        Ok(())
     }
 }

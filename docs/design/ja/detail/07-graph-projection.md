@@ -40,7 +40,7 @@
 | `EntityUpserted` | entity 正規化 | `{project_id, entity_id, uid, entity_type, natural_key, name, qualified_name, revision, resolution, seq}` |
 | `RelationshipUpserted` | Fact 受理 | `{project_id, rel_id, src_uid, dst_uid, rel_type, fact_id, resolution, confidence, revision, seq}` |
 | `DocumentNodeUpserted` | 設計書構造木 | `{project_id, entity_id, uid, node_kind, parent_uid, revision, seq}`（**chunk は含めない**） |
-| `DocumentRevisionSuperseded` | 改版追加 | `{project_id, document_id, old_revision, new_revision, seq}` |
+| `DocumentRevisionSuperseded` | 改版追加 | `{project_id, document_id, old_revision, new_revision, seq}`（worker は旧 revision の Neo4j ノードを削除し、切替先は PG から再投影） |
 | `ProjectionTombstone` | 論理削除 | `{project_id, uid, deleted_at, seq}` |
 | `FactAccepted` | `detail/06` §6 | Fact の要約 + `entity` / `relationship` への正規化結果 |
 
@@ -177,7 +177,8 @@ UPDATE graph_meta.projection_state
 
 > 2026-11-07 の実装は in-place の同期 API である。PG live 行を keyset で 1,000 件ずつ読み、
 > Neo4j の project scope を `clear_project` 後に `UNWIND` 再投影する。2.5M 辺は 176.168 秒で
-> PG / Neo4j / API 件数一致。影ラベルと切替は依然として未実装（§12）。
+> PG / Neo4j / API 件数一致。**2026-11-08**: 影ラベル再構築・差分追従・ABORT を実装し、
+> `scripts/phase3-graph-ops-eval.py` で G-06 / G-07 を実測した。
 
 ```text
 [1] graph_meta.projection_build に status=BUILDING で 1 行作る
@@ -307,10 +308,11 @@ let cypher = format!(
 
 ---
 
-## 12. 実装状況（2026-11-07）
+## 12. 実装状況（2026-11-08）
 
-Phase 3 の実装は本書の不変条件のうち I-1 / I-2 / I-3 / I-4 / I-6 を満たす。I-5（無停止の影ラベル再構築）は
-**降格**しており、現状は in-place の全件再構築である。受入の実測値と未実施項目は
+Phase 3 の実装は本書の不変条件 I-1〜I-6 をすべて満たす。I-5（無停止の影ラベル再構築）は
+`scripts/phase3-graph-ops-eval.py` で G-06 / G-07 を、I-6（日次漂流と完全性表示）は
+G-09 を実測済み。受入の実測値と残る未実施項目（投影器 10 分停止、10 万ノード投影）は
 `docs/phase3/acceptance.md` に記録する。
 
 | 項目 | 実装 | 設計との差分 |
@@ -320,11 +322,11 @@ Phase 3 の実装は本書の不変条件のうち I-1 / I-2 / I-3 / I-4 / I-6 �
 | 正本 / Outbox | `graph_meta.entity` / `relationship` と `core.outbox_event` を同一 tx で書く。`DocumentNodeUpserted` / `RelationshipUpserted` / `ProjectionTombstone` | event payload は本書 §2 の最小項目 + `src_type` / `dst_type` |
 | 順序保証 | 実体・関係とも `projection_seq` の条件付き書き込み（`WHERE e.projection_seq <= $seq`） | 関係の `projection_seq` は `012_graph_relationship_seq.sql` で追加 |
 | Projector | worker の各 tick 末尾に outbox を最大 5,000 件取得し、event／関係型ごとに最大 1,000 件を `UNWIND`。失敗は 3 回で dead letter | 複数 projector は未実装。単一 worker 前提 |
-| 全件再構築 | `POST /graph/rebuild` が PG の live 行を keyset で 1,000 件ずつ読み、`clear_project` 後に `UNWIND` 再投影。`projection_build.shadow_label='in-place'` | 影ラベル・差分追従・VERIFYING → SWITCHED・ABORT は未実装。再構築中は読み取りが一時的に欠ける |
-| 漂流検出 | `GET /graph/stats` が PG / Neo4j の件数と `drift_rate` を都度比較 | 日次バッチ・ホームの完全性表示・警報は未実装 |
+| 全件再構築 | `POST /graph/rebuild` が影ラベル `Entity__<8hex>` に 1,000 件ずつ投影し、差分追従 → 検証（差分 0）→ ラベル入替 → 旧ラベル削除。`projection_build` に BUILDING / VERIFYING / SWITCHED / FAILED / ABORTED を残す | 読み取りは切替まで旧 `:Entity`。`POST /graph/rebuild/abort` で中止（旧グラフ無傷）。検証差分が 1 件でも切替えない |
+| 漂流検出 | `GET /graph/stats` が都度比較。worker が起動時 + 24 時間ごとに `detect_graph_drift` を実行し `graph_meta.projection_drift` に記録、劣化時は監査 `graph.drift.detected` | グラフ画面に未消費イベント数・直近 drift・最終再構築を表示 |
 | 削除伝播 | 論理削除 → `ProjectionTombstone` → Neo4j `DETACH DELETE` | 1 実体 1 イベント。1,000 件分割削除は未実装 |
 | 構造木の投影 | Document / Sheet / Section / Region / Table を投影 | **chunk は投影しない**（I-3）。Phase 3 受入文の「Document/Section/Chunk」は chunk を除く構造実体として解釈 |
-| `revision` / `valid_to` | 実体に `revision` / `first_seen_rev` / `last_seen_rev`、関係に `revision` / `valid_to` | 改版切替時の旧版 tombstone（`DocumentRevisionSuperseded`）は未実装。Phase 1 の改版履歴未実装に依存 |
+| `revision` / `valid_to` | 実体に `revision` / `first_seen_rev` / `last_seen_rev`、関係に `revision` / `valid_to` | 改版切替時は `DocumentRevisionSuperseded` を outbox に積み、worker が旧 revision の Neo4j ノードを削除して切替先を PG から再投影する（Phase 2 改版管理で実装済み） |
 | PgGraphProvider lite | 実体検索・隣接・経路・サブグラフ・トレーサビリティを再帰 CTE で実装。深さは 3 ホップに clamp | 専用 trait は置かず `store` のメソッド群。API から利用 |
 | Neo4j | ローカル検証は Neo4j 2026.05.0 Community（`bolt://localhost:7687`） | 設計の 5.26 LTS とは版が異なる。compose は `neo4j:5.26-community` を定義（未検証） |
 

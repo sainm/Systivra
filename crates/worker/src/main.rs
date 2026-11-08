@@ -23,6 +23,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut last_artifact_cleanup = std::time::Instant::now()
         .checked_sub(Duration::from_secs(86_400))
         .unwrap_or_else(std::time::Instant::now);
+    let mut last_drift_check = std::time::Instant::now()
+        .checked_sub(Duration::from_secs(86_400))
+        .unwrap_or_else(std::time::Instant::now);
+    let neo4j_disabled = std::env::var("NEO4J_DISABLED").ok().as_deref() == Some("1");
     let retention_days = std::env::var("ARTIFACT_RETENTION_DAYS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -53,6 +57,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Err(error) => tracing::warn!(error = %error, "artifact retention failed"),
                     }
                     last_artifact_cleanup = std::time::Instant::now();
+                }
+                if !neo4j_disabled && last_drift_check.elapsed() >= Duration::from_secs(86_400) {
+                    match app.store().begin_unscoped().await {
+                        Ok(mut tx) => {
+                            let projects = app.store().list_project_ids(&mut tx).await;
+                            if let Err(error) = app::commit_tx(tx).await {
+                                tracing::warn!(%error, "drift list commit failed");
+                            }
+                            if let Ok(projects) = projects {
+                                for id in projects {
+                                    match app.detect_graph_drift(domain::ProjectId(id)).await {
+                                        Ok(view) if view.degraded => tracing::warn!(
+                                            %id,
+                                            drift_rate = view.drift_rate,
+                                            pg_nodes = view.pg_nodes,
+                                            neo4j_nodes = view.neo4j_nodes,
+                                            "graph drift detected"
+                                        ),
+                                        Ok(view) => tracing::info!(
+                                            %id,
+                                            drift_rate = view.drift_rate,
+                                            "graph drift check ok"
+                                        ),
+                                        Err(error) => tracing::warn!(
+                                            %id,
+                                            %error,
+                                            "graph drift check failed"
+                                        ),
+                                    }
+                                }
+                            } else if let Err(error) = projects {
+                                tracing::warn!(%error, "drift project list failed");
+                            }
+                        }
+                        Err(error) => tracing::warn!(%error, "drift check tx failed"),
+                    }
+                    last_drift_check = std::time::Instant::now();
                 }
                 if let Err(error) = worker::run(&app).await {
                     tracing::error!(error = %error, "worker tick failed");

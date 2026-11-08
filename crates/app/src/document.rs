@@ -5,7 +5,7 @@ use contracts::{
     BulkDuplicate, BulkImportMode, BulkImportRequest, BulkImportResponse, DocType, DocumentDetail,
     DocumentListQuery, DocumentListResponse, DocumentSummary, ErrorCode, JobLinks, JobStatus,
     NextLinks, ParseAcceptedResponse, RegisterDocumentRequest, RegisterDocumentResponse,
-    RevisionSummary,
+    RegisterRevisionResponse, RevisionListResponse, RevisionSummary,
 };
 use domain::{DocumentId, JobId, Permission, ProjectId, RevisionId};
 use serde_json::{json, Value};
@@ -228,6 +228,308 @@ impl App {
                 parse: format!("/api/v1/documents/{document_id}/revisions/{revision_id}:parse"),
             },
             document: detail,
+        })
+    }
+
+    fn revision_summary(row: &store::RevisionRow) -> RevisionSummary {
+        RevisionSummary {
+            id: RevisionId(row.id),
+            source_revision: row.source_revision.clone(),
+            content_hash: engine_rag::hash_to_sha256(&row.content_hash),
+            status: row.status.clone(),
+            acquired_at: row.acquired_at,
+            parsed_at: row.parsed_at,
+            file_size: row.file_size,
+            mime_type: row.mime_type.clone(),
+            page_count: row.page_count,
+            chunk_count: row.chunk_count,
+            parse_status: row.parse_status.clone(),
+        }
+    }
+
+    pub async fn register_revision(
+        &self,
+        auth: &Authenticated,
+        project: ProjectId,
+        document_id: DocumentId,
+        req: RegisterDocumentRequest,
+        trace: Option<String>,
+    ) -> Result<RegisterRevisionResponse, AppError> {
+        let role = self
+            .role_in(auth.user_id, project)
+            .await?
+            .ok_or(AppError::NotFound(ErrorCode::NotFoundDocument))?;
+        if !Permission::DocumentIngest.access_for(role).can_write() {
+            return Err(AppError::Forbidden("document:write がありません".into()));
+        }
+        let mime_type = req
+            .mime_type
+            .clone()
+            .unwrap_or_else(|| PDF_MIME.to_string());
+        if !is_supported_mime(&mime_type) {
+            return Err(AppError::Validation(
+                "登録できるのは PDF / XLSX / DOCX / PPTX です".into(),
+            ));
+        }
+        let prefix = format!("raw/{project}/");
+        if !req.object_key.starts_with(&prefix) || req.object_key.contains("..") {
+            return Err(AppError::Validation(
+                "object_key がこのプロジェクトの範囲外です".into(),
+            ));
+        }
+        let path = self.object_path(&req.object_key)?;
+        let meta = tokio::fs::metadata(&path).await.map_err(|_| {
+            AppError::Validation("アップロード済みのオブジェクトがありません".into())
+        })?;
+        if meta.len() == 0 {
+            return Err(AppError::Validation("空のファイルは登録できません".into()));
+        }
+        if meta.len() > MAX_UPLOAD_BYTES {
+            return Err(AppError::Validation(
+                "ファイルサイズが上限を超えています".into(),
+            ));
+        }
+        let bytes = tokio::fs::read(&path).await?;
+        let content_hash = engine_rag::sha256(&bytes);
+        if mime_type.eq_ignore_ascii_case(PDF_MIME) {
+            if !bytes.starts_with(b"%PDF-") {
+                return Err(AppError::Validation("PDF のシグネチャがありません".into()));
+            }
+        } else if !bytes.starts_with(b"PK\x03\x04") && !bytes.starts_with(b"PK\x05\x06") {
+            return Err(AppError::Validation(
+                "XLSX の ZIP シグネチャがありません".into(),
+            ));
+        }
+
+        let revision_id = RevisionId::new();
+        let now = Utc::now();
+        let mut tx = self.store().begin_scoped(project).await?;
+        let doc = self
+            .store()
+            .find_document(&mut tx, document_id.0)
+            .await?
+            .ok_or(AppError::NotFound(ErrorCode::NotFoundDocument))?;
+        if doc.project_id != project.0 {
+            return Err(AppError::NotFound(ErrorCode::NotFoundDocument));
+        }
+        if let Some((_existing_document, _)) = self
+            .store()
+            .find_revision_by_hash(&mut tx, &content_hash)
+            .await?
+        {
+            return Err(AppError::Conflict(ErrorCode::ConflictAlreadyImported));
+        }
+        self.store()
+            .demote_current_revision(&mut tx, document_id.0)
+            .await?;
+        self.store()
+            .insert_revision(
+                &mut tx,
+                &store::NewRevision {
+                    id: revision_id.0,
+                    document_id: document_id.0,
+                    source_revision: req.source_revision.clone(),
+                    content_hash: content_hash.clone(),
+                    object_key: req.object_key.clone(),
+                    file_size: meta.len() as i64,
+                    mime_type: mime_type.clone(),
+                    acquired_at: now,
+                },
+            )
+            .await?;
+        self.store()
+            .activate_revision(&mut tx, document_id.0, revision_id.0)
+            .await?;
+        self.store()
+            .append_audit(
+                &mut tx,
+                &store::AuditDraft {
+                    project_id: Some(project.0),
+                    actor_type: "USER".into(),
+                    actor_id: auth.user_id.to_string(),
+                    action: "document.revision.register".into(),
+                    target_type: Some("document".into()),
+                    target_id: Some(document_id.to_string()),
+                    input_digest: Some(content_hash.clone()),
+                    result: "SUCCESS".into(),
+                    detail: json!({
+                        "revision_id": revision_id.to_string(),
+                        "source_revision": req.source_revision,
+                        "object_key": req.object_key,
+                        "mime_type": mime_type,
+                    }),
+                    trace_id: trace,
+                },
+            )
+            .await?;
+        store::commit(tx).await?;
+
+        Ok(RegisterRevisionResponse {
+            revision: RevisionSummary {
+                id: revision_id,
+                source_revision: req.source_revision,
+                content_hash: engine_rag::hash_to_sha256(&content_hash),
+                status: "CURRENT".into(),
+                acquired_at: now,
+                parsed_at: None,
+                file_size: meta.len() as i64,
+                mime_type,
+                page_count: 0,
+                chunk_count: 0,
+                parse_status: "NOT_PARSED".into(),
+            },
+            next: NextLinks {
+                parse: format!("/api/v1/documents/{document_id}/revisions/{revision_id}:parse"),
+            },
+        })
+    }
+
+    pub async fn list_document_revisions(
+        &self,
+        auth: &Authenticated,
+        document_id: DocumentId,
+    ) -> Result<RevisionListResponse, AppError> {
+        let project = self
+            .project_for(auth.user_id, "document", document_id.0)
+            .await?;
+        let role = self
+            .role_in(auth.user_id, project)
+            .await?
+            .ok_or(AppError::NotFound(ErrorCode::NotFoundDocument))?;
+        if !Permission::DocumentIngest.access_for(role).can_read() {
+            return Err(AppError::NotFound(ErrorCode::NotFoundDocument));
+        }
+        let mut tx = self.store().begin_scoped(project).await?;
+        let doc = self
+            .store()
+            .find_document(&mut tx, document_id.0)
+            .await?
+            .ok_or(AppError::NotFound(ErrorCode::NotFoundDocument))?;
+        if doc.project_id != project.0 {
+            return Err(AppError::NotFound(ErrorCode::NotFoundDocument));
+        }
+        let rows = self.store().list_revisions(&mut tx, document_id.0).await?;
+        store::commit(tx).await?;
+        Ok(RevisionListResponse {
+            items: rows.iter().map(Self::revision_summary).collect(),
+        })
+    }
+
+    pub async fn document_revision_content(
+        &self,
+        auth: &Authenticated,
+        document_id: DocumentId,
+        revision_id: RevisionId,
+    ) -> Result<(Vec<u8>, String), AppError> {
+        let project = self
+            .project_for(auth.user_id, "document", document_id.0)
+            .await?;
+        let role = self
+            .role_in(auth.user_id, project)
+            .await?
+            .ok_or(AppError::NotFound(ErrorCode::NotFoundDocument))?;
+        if !Permission::DocumentIngest.access_for(role).can_read() {
+            return Err(AppError::NotFound(ErrorCode::NotFoundDocument));
+        }
+        let mut tx = self.store().begin_scoped(project).await?;
+        let revision = self
+            .store()
+            .find_revision(&mut tx, revision_id.0)
+            .await?
+            .ok_or(AppError::NotFound(ErrorCode::NotFoundDocument))?;
+        store::commit(tx).await?;
+        if revision.document_id != document_id.0 {
+            return Err(AppError::NotFound(ErrorCode::NotFoundDocument));
+        }
+        let bytes = self.read_object(&revision.object_key).await?;
+        Ok((bytes, revision.mime_type))
+    }
+
+    pub async fn activate_document_revision(
+        &self,
+        auth: &Authenticated,
+        project: ProjectId,
+        document_id: DocumentId,
+        revision_id: RevisionId,
+        trace: Option<String>,
+    ) -> Result<RevisionListResponse, AppError> {
+        let role = self
+            .role_in(auth.user_id, project)
+            .await?
+            .ok_or(AppError::NotFound(ErrorCode::NotFoundDocument))?;
+        if !Permission::DocumentIngest.access_for(role).can_write() {
+            return Err(AppError::Forbidden("document:write がありません".into()));
+        }
+        let mut tx = self.store().begin_scoped(project).await?;
+        let doc = self
+            .store()
+            .find_document(&mut tx, document_id.0)
+            .await?
+            .ok_or(AppError::NotFound(ErrorCode::NotFoundDocument))?;
+        if doc.project_id != project.0 {
+            return Err(AppError::NotFound(ErrorCode::NotFoundDocument));
+        }
+        let revision = self
+            .store()
+            .find_revision(&mut tx, revision_id.0)
+            .await?
+            .ok_or(AppError::NotFound(ErrorCode::NotFoundDocument))?;
+        if revision.document_id != document_id.0 {
+            return Err(AppError::NotFound(ErrorCode::NotFoundDocument));
+        }
+        let previous = self
+            .store()
+            .current_revision_of(&mut tx, document_id.0)
+            .await?;
+        self.store()
+            .activate_revision(&mut tx, document_id.0, revision_id.0)
+            .await?;
+        if let Some(previous) = previous {
+            if previous != revision_id.0 {
+                self.store()
+                    .supersede_document_revision(
+                        &mut tx,
+                        project.0,
+                        document_id.0,
+                        previous,
+                        revision_id.0,
+                    )
+                    .await?;
+            }
+        }
+        let drafts = self
+            .store()
+            .document_node_drafts(&mut tx, revision_id.0)
+            .await?;
+        if !drafts.is_empty() {
+            self.store()
+                .sync_document_nodes(&mut tx, project.0, document_id.0, revision_id.0, &drafts)
+                .await?;
+        }
+        self.store()
+            .append_audit(
+                &mut tx,
+                &store::AuditDraft {
+                    project_id: Some(project.0),
+                    actor_type: "USER".into(),
+                    actor_id: auth.user_id.to_string(),
+                    action: "document.revision.activate".into(),
+                    target_type: Some("document".into()),
+                    target_id: Some(document_id.to_string()),
+                    input_digest: None,
+                    result: "SUCCESS".into(),
+                    detail: json!({
+                        "from": previous.map(|id| id.to_string()),
+                        "to": revision_id.to_string(),
+                    }),
+                    trace_id: trace,
+                },
+            )
+            .await?;
+        let rows = self.store().list_revisions(&mut tx, document_id.0).await?;
+        store::commit(tx).await?;
+        Ok(RevisionListResponse {
+            items: rows.iter().map(Self::revision_summary).collect(),
         })
     }
 

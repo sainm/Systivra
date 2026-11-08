@@ -131,6 +131,14 @@ export function GraphPage({
               <span className="chip num">{t("graph.relationships")}: {stats.pg_relationships}</span>
               <span className="chip num">Neo4j: {stats.neo4j_nodes}/{stats.neo4j_relationships}</span>
               <span className="chip num">{t("graph.drift")}: {stats.drift_rate.toFixed(3)}</span>
+              <span className="chip num">{t("graph.pendingEvents")}: {stats.pending_events}</span>
+              <span className="chip num">
+                {t("graph.lastDrift")}: {stats.last_drift_checked_at ? new Date(stats.last_drift_checked_at).toLocaleString("ja-JP") : "-"}
+              </span>
+              {stats.drift_degraded ? <span className="chip chip-warn">{t("graph.driftDegraded")}</span> : null}
+              <span className="chip num">
+                {t("graph.lastBuild")}: {stats.last_build ? `${stats.last_build.status}${stats.last_build.drift_rate != null ? ` / ${stats.last_build.drift_rate.toFixed(3)}` : ""}` : "-"}
+              </span>
               <span className="chip">{t("graph.ontologyVersion")}: {stats.ontology_version}</span>
             </>
           ) : null}

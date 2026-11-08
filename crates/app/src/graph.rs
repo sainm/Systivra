@@ -191,6 +191,15 @@ impl App {
             .store()
             .graph_last_event_seq(&mut tx, project.0)
             .await?;
+        let pending_events = self.store().pending_event_count(&mut tx, project.0).await?;
+        let drift = self
+            .store()
+            .latest_projection_drift(&mut tx, project.0)
+            .await?;
+        let build = self
+            .store()
+            .latest_projection_build(&mut tx, project.0)
+            .await?;
         let ontology_version = self.store().published_ontology_version(&mut tx).await?;
         store::commit(tx).await?;
         let (neo4j_nodes, neo4j_relationships) = neo4j_counts(project.0).await.unwrap_or((0, 0));
@@ -207,6 +216,19 @@ impl App {
             drift_rate,
             last_event_seq,
             ontology_version,
+            pending_events,
+            last_drift_checked_at: drift.as_ref().map(|row| row.0),
+            last_drift_rate: drift.as_ref().map(|row| row.1),
+            drift_degraded: drift.as_ref().map(|row| row.2).unwrap_or(false),
+            last_build: build.map(|row| contracts::GraphBuildView {
+                build_id: row.0,
+                status: row.1,
+                shadow_label: row.2,
+                drift_rate: row.3,
+                entities_written: row.4,
+                relationships_written: row.5,
+                finished_at: row.6,
+            }),
         })
     }
 
@@ -255,6 +277,16 @@ impl App {
         }
         let mut tx = self.store().begin_scoped(project).await?;
         let base_seq = self.store().graph_outbox_head_seq(&mut tx).await?;
+        let (pg_nodes, pg_relationships) = self
+            .store()
+            .graph_project_counts(&mut tx, project.0)
+            .await?;
+        let build_id = Uuid::new_v4();
+        let short = build_id.simple().to_string()[..8].to_owned();
+        let shadow_label = format!("Entity__{short}");
+        self.store()
+            .create_projection_build(&mut tx, build_id, project.0, &shadow_label, base_seq)
+            .await?;
         store::commit(tx).await?;
 
         let projector = neo4j_projector().ok_or_else(|| {
@@ -264,19 +296,37 @@ impl App {
             .ensure_schema()
             .await
             .map_err(|e| AppError::Validation(e.to_string()))?;
-        projector
-            .clear_project(&project.0.to_string())
-            .await
-            .map_err(|e| AppError::Validation(e.to_string()))?;
-        let rebuild_event =
-            uuid::Uuid::new_v5(&project.0, format!("graph-rebuild:{base_seq}").as_bytes());
+        let batch = std::env::var("GRAPH_REBUILD_BATCH")
+            .ok()
+            .and_then(|value| value.parse::<i64>().ok())
+            .unwrap_or(1_000)
+            .clamp(1, 5_000);
+        let delay_ms = std::env::var("GRAPH_REBUILD_STEP_DELAY_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(0);
+
         let mut entity_count = 0i64;
         let mut after_id = Uuid::nil();
         loop {
+            if self.rebuild_aborted(project, build_id).await? {
+                let _ = projector
+                    .delete_label(&project.0.to_string(), &shadow_label)
+                    .await;
+                return Ok(contracts::GraphRebuildResponse {
+                    entities: entity_count,
+                    relationships: 0,
+                    build_id,
+                    status: "ABORTED".into(),
+                    drift_rate: 0.0,
+                    previous_entities: pg_nodes,
+                    previous_relationships: pg_relationships,
+                });
+            }
             let mut tx = self.store().begin_scoped(project).await?;
             let page = self
                 .store()
-                .graph_entities_page(&mut tx, project.0, after_id, 1_000)
+                .graph_entities_page(&mut tx, project.0, after_id, batch)
                 .await?;
             store::commit(tx).await?;
             if page.is_empty() {
@@ -298,20 +348,37 @@ impl App {
                 })
                 .collect::<Vec<_>>();
             projector
-                .apply_entities(&rows)
+                .apply_entities_as(&shadow_label, &rows)
                 .await
                 .map_err(|e| AppError::Validation(e.to_string()))?;
             entity_count += page.len() as i64;
             after_id = page.last().map(|entity| entity.id).unwrap_or(after_id);
+            if delay_ms > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            }
         }
 
         let mut relationship_count = 0i64;
         after_id = Uuid::nil();
         loop {
+            if self.rebuild_aborted(project, build_id).await? {
+                let _ = projector
+                    .delete_label(&project.0.to_string(), &shadow_label)
+                    .await;
+                return Ok(contracts::GraphRebuildResponse {
+                    entities: entity_count,
+                    relationships: relationship_count,
+                    build_id,
+                    status: "ABORTED".into(),
+                    drift_rate: 0.0,
+                    previous_entities: pg_nodes,
+                    previous_relationships: pg_relationships,
+                });
+            }
             let mut tx = self.store().begin_scoped(project).await?;
             let page = self
                 .store()
-                .graph_relationships_page(&mut tx, project.0, after_id, 1_000)
+                .graph_relationships_page(&mut tx, project.0, after_id, batch)
                 .await?;
             store::commit(tx).await?;
             if page.is_empty() {
@@ -336,7 +403,7 @@ impl App {
             }
             for (rel_type, rows) in by_type {
                 projector
-                    .apply_relationships(&rel_type, &rows)
+                    .apply_relationships_as(&shadow_label, &rel_type, &rows)
                     .await
                     .map_err(|e| AppError::Validation(e.to_string()))?;
             }
@@ -345,19 +412,225 @@ impl App {
                 .last()
                 .map(|relationship| relationship.id)
                 .unwrap_or(after_id);
+            if delay_ms > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            }
         }
-        projector
-            .apply_projection_state(project.0, base_seq, rebuild_event)
-            .await
-            .map_err(|e| AppError::Validation(e.to_string()))?;
+
         let mut tx = self.store().begin_scoped(project).await?;
         self.store()
-            .record_projection_build(&mut tx, project.0, entity_count, relationship_count)
+            .update_projection_build(
+                &mut tx,
+                build_id,
+                "VERIFYING",
+                entity_count,
+                relationship_count,
+                None,
+            )
             .await?;
         store::commit(tx).await?;
+
+        let (shadow_nodes, shadow_relationships) = projector
+            .count_label(&project.0.to_string(), &shadow_label)
+            .await
+            .map_err(|e| AppError::Validation(e.to_string()))?;
+        let diff =
+            (pg_nodes - shadow_nodes).abs() + (pg_relationships - shadow_relationships).abs();
+        let drift_rate = diff as f64 / 1_000.0;
+        if diff > 0 || drift_rate > 0.001 {
+            let _ = projector
+                .delete_label(&project.0.to_string(), &shadow_label)
+                .await;
+            let mut tx = self.store().begin_scoped(project).await?;
+            self.store()
+                .update_projection_build(
+                    &mut tx,
+                    build_id,
+                    "FAILED",
+                    entity_count,
+                    relationship_count,
+                    Some(drift_rate),
+                )
+                .await?;
+            store::commit(tx).await?;
+            return Err(AppError::Validation(format!(
+                "検証で差分 {diff} 件（drift {drift_rate:.5}）。切替を中止しました"
+            )));
+        }
+
+        let old_label = format!("Entity__old_{short}");
+        projector
+            .switch_label(&project.0.to_string(), &shadow_label, &old_label)
+            .await
+            .map_err(|e| AppError::Validation(e.to_string()))?;
+        let _ = projector
+            .delete_label(&project.0.to_string(), &old_label)
+            .await;
+
+        let mut replay_seq = base_seq;
+        loop {
+            let mut tx = self.store().begin_scoped(project).await?;
+            let events = self
+                .store()
+                .graph_events_after(&mut tx, project.0, replay_seq, 500)
+                .await?;
+            store::commit(tx).await?;
+            if events.is_empty() {
+                break;
+            }
+            for event in &events {
+                projector
+                    .apply(&event.event_type, &event.payload, event.seq, event.event_id)
+                    .await
+                    .map_err(|e| AppError::Validation(e.to_string()))?;
+                replay_seq = event.seq;
+            }
+        }
+
+        let mut tx = self.store().begin_scoped(project).await?;
+        let head_seq = self.store().graph_outbox_head_seq(&mut tx).await?;
+        self.store()
+            .update_projection_build(
+                &mut tx,
+                build_id,
+                "SWITCHED",
+                entity_count,
+                relationship_count,
+                Some(drift_rate),
+            )
+            .await?;
+        store::commit(tx).await?;
+        projector
+            .apply_projection_state(project.0, head_seq, build_id)
+            .await
+            .map_err(|e| AppError::Validation(e.to_string()))?;
+
         Ok(contracts::GraphRebuildResponse {
             entities: entity_count,
             relationships: relationship_count,
+            build_id,
+            status: "SWITCHED".into(),
+            drift_rate,
+            previous_entities: pg_nodes,
+            previous_relationships: pg_relationships,
+        })
+    }
+
+    async fn rebuild_aborted(&self, project: ProjectId, build_id: Uuid) -> Result<bool, AppError> {
+        let mut tx = self.store().begin_scoped(project).await?;
+        let status = self
+            .store()
+            .projection_build_status(&mut tx, build_id)
+            .await?;
+        store::commit(tx).await?;
+        Ok(!matches!(status.as_deref(), Some("BUILDING" | "VERIFYING")))
+    }
+
+    pub async fn graph_abort_rebuild(
+        &self,
+        auth: &Authenticated,
+        project: ProjectId,
+    ) -> Result<contracts::GraphRebuildAbortResponse, AppError> {
+        let role = self
+            .role_in(auth.user_id, project)
+            .await?
+            .ok_or(AppError::NotFound(ErrorCode::NotFound))?;
+        if !Permission::ProviderManage.access_for(role).can_write() {
+            return Err(AppError::Forbidden("provider:manage がありません".into()));
+        }
+        let mut tx = self.store().begin_scoped(project).await?;
+        let aborted = self
+            .store()
+            .abort_projection_build(&mut tx, project.0)
+            .await?;
+        store::commit(tx).await?;
+        let build_id = aborted.as_ref().map(|(id, _)| *id);
+        let mut shadow_deleted = false;
+        if let Some((_, label)) = &aborted {
+            if let Some(projector) = neo4j_projector() {
+                projector
+                    .delete_label(&project.0.to_string(), label)
+                    .await
+                    .map_err(|e| AppError::Validation(e.to_string()))?;
+                shadow_deleted = true;
+            }
+        }
+        Ok(contracts::GraphRebuildAbortResponse {
+            build_id,
+            status: if aborted.is_some() { "ABORTED" } else { "NOOP" }.into(),
+            shadow_deleted,
+        })
+    }
+
+    pub async fn detect_graph_drift(
+        &self,
+        project: ProjectId,
+    ) -> Result<contracts::GraphDriftView, AppError> {
+        let projector = neo4j_projector().ok_or_else(|| {
+            AppError::CapabilityUnsupported("Neo4j projector が設定されていません".into())
+        })?;
+        let mut tx = self.store().begin_scoped(project).await?;
+        let (pg_nodes, pg_relationships) = self
+            .store()
+            .graph_project_counts(&mut tx, project.0)
+            .await?;
+        store::commit(tx).await?;
+        let (neo4j_nodes, neo4j_relationships) = projector
+            .count_project(&project.0.to_string())
+            .await
+            .map_err(|e| AppError::Validation(e.to_string()))?;
+        let diff = (pg_nodes - neo4j_nodes).abs() + (pg_relationships - neo4j_relationships).abs();
+        let drift_rate = diff as f64 / 1_000.0;
+        let degraded = diff > 0 || drift_rate > 0.001;
+        let mut tx = self.store().begin_scoped(project).await?;
+        self.store()
+            .insert_projection_drift(
+                &mut tx,
+                &store::NewProjectionDrift {
+                    project_id: project.0,
+                    pg_nodes,
+                    pg_relationships,
+                    neo4j_nodes,
+                    neo4j_relationships,
+                    drift_rate,
+                    degraded,
+                },
+            )
+            .await?;
+        if degraded {
+            self.store()
+                .append_audit(
+                    &mut tx,
+                    &store::AuditDraft {
+                        project_id: Some(project.0),
+                        actor_type: "SYSTEM".into(),
+                        actor_id: "graph-drift".into(),
+                        action: "graph.drift.detected".into(),
+                        target_type: Some("graph_meta.projection_state".into()),
+                        target_id: Some(project.0.to_string()),
+                        input_digest: None,
+                        result: "DEGRADED".into(),
+                        detail: serde_json::json!({
+                            "pg_nodes": pg_nodes,
+                            "pg_relationships": pg_relationships,
+                            "neo4j_nodes": neo4j_nodes,
+                            "neo4j_relationships": neo4j_relationships,
+                            "drift_rate": drift_rate,
+                        }),
+                        trace_id: None,
+                    },
+                )
+                .await?;
+        }
+        store::commit(tx).await?;
+        Ok(contracts::GraphDriftView {
+            checked_at: chrono::Utc::now(),
+            pg_nodes,
+            pg_relationships,
+            neo4j_nodes,
+            neo4j_relationships,
+            drift_rate,
+            degraded,
         })
     }
 

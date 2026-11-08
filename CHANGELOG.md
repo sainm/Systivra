@@ -1,5 +1,150 @@
 # Changelog
 
+## 2026-11-08 — Azure Database for PostgreSQL 対応
+
+### Changed（設計）
+
+- **`BYPASSRLS` をやめた。** `systivra_scheduler` の横断閲覧を RLS 方針
+  `scheduler_scope`（`FOR ALL TO systivra_scheduler USING (true)`）で表現する。
+  対象は許可リストの 4 表: `core.job` / `core.project` / `ai.approval_request` /
+  `test.test_execution`。
+  - Azure Database for PostgreSQL では PG16 未満、`azure_pg_admin` が非管理者に
+    `BYPASSRLS` を付与できない（[公式](https://learn.microsoft.com/ja-jp/azure/postgresql/security/security-access-control)）。
+    RDS / Cloud SQL も制約が違うため、属性に依存すると移植できない。
+  - 方針は `pg_policies` に並ぶので「誰が何を横断できるか」が一覧できる。
+    方針は権限を付けない（RLS はフィルタのみ。GRANT は roles.sql が管轄）。
+  - 既存環境の normalize も roles.sql が行う（`ALTER ROLE ... NOBYPASSRLS`）。
+    CREATE 時だけ見ていると、古いロールが属性を持ち続ける。
+- `scripts/verify-db.sh`: `scheduler` が BYPASSRLS を持たないこと、方針が 4 表に
+  あること、方針が app に適用されないことを検査。test / ai の方針数を
+  11→12 / 10→11 に更新（横断方針 1 件が増えたため）。
+
+### Added（Azure デプロイ手引）
+
+- `deployment/azure/README.md`: 接続文字列（`sslmode=require`）、
+  `azure.extensions` への `vector,pg_trgm` 登録（**マイグレーションの前**）、
+  バックアップ / PITR（プラットフォームの自動バックアップ + `az ... restore`）、
+  RPO の 2 分解、組み込み接続プールを**使ってはいけない**理由
+  （トランザクション プーリングが `SET LOCAL app.project_id` をセッション間で漏らす）、
+  `verify-db.sh` を Azure で実行しない理由、デプロイ順序。
+- `.env.example` / `README.md`: Azure の `DATABASE_URL` 例と手引への導線。
+- `docs/phase8/operations.md`: RPO を論理（24h）/ 物理（最大 5 分）に分割。
+  PITR は自前 PG のみ同じ設定を適用でき、マネージド PG はプラットフォーム側を使う。
+
+### Fixed（実装）
+
+- **RLS 下で outbox の publish が止まっていた。** publish と `graph_meta.projection_state` の
+  更新を同じ未スコープ tx で書いていたため、`projection_state` の `WITH CHECK` で
+  失敗し、publish 済みフラグが巻き戻ってイベントが 5 分のリース切れまで残った。
+  publish は未スコープ tx、`projection_state` はプロジェクト別のスコープ付き tx に分離。
+- `core.session` の掃除に必要な `SELECT/UPDATE/DELETE` を scheduler へ付与。
+- `verify-db.sh` にセッション掃除権限の検査を追加し、未適用だった 028 / 029 を
+  適用対象へ追加（claim 索引・`projection_drift` の RLS / `rate_limit_bucket` /
+  `role_source` を検査）。029 の付与は実利用者（app）だけに揃えた。
+- `scripts/scheduler-rls-eval.py`: NOBYPASSRLS 下で CODE_SYNC / CODE_ANALYZE /
+  TEST_RUN prepare / outbox drain / セッション掃除 / 保持期限 UPDATE / corpus 非可視を
+  12 チェックで実測（12/12）。
+
+### Fixed（検証スクリプト）
+
+- `phase7-agent-loop-eval.py` が**ポート衝突を検出していなかった**。前回の API が
+  残っていると新プロセスは bind に失敗して即死するのに、`wait_http` は旧プロセスに
+  当たって成功し、古い DB のデータを読んで意味不明な AssertionError になっていた。
+  `assert api.poll() is None` を追加。
+
+### Verification
+
+- `verify-db.sh` 001〜029 全通過（BYPASSRLS なし + 方針 4 表 + 028/029 の
+  claim 索引・projection_drift・rate_limit_bucket・role_source）。
+- E2E: `phase7-eval` / `phase6-test-eval` / `job-recovery-eval` /
+  `phase7-agent-loop-eval` / `phase7-mcp-eval` / `phase6-runner-eval` すべて緑
+  （worker は `systivra_scheduler` のまま。方針だけで横断閲覧できている）。
+- ドキュメント間の相対リンクを機械検査（破断 0）。
+
+## 2026-11-08 — Phase 2 改版管理: 改版登録・切替・版指定検索・graph tombstone
+
+### Added
+
+- 改版 API: `POST /projects/{pid}/documents/{did}/revisions`（改版登録）、
+  `GET /documents/{did}/revisions`（履歴）、
+  `GET /documents/{did}/revisions/{rid}/content`（原本）、
+  `POST /projects/{pid}/documents/{did}/revisions/{rid}:activate`（切替）。
+  切替は `core.document_revision.status` / `corpus.chunk.is_current` /
+  `document.current_revision_id` を同一 transaction で更新する。
+- 切替時に旧 revision のグラフ実体を PG で tombstone し、
+  `DocumentRevisionSuperseded` を outbox へ。worker / projector は Neo4j の
+  旧 revision ノードを削除し、切替先の構造を PG から再投影する。
+- 検索は `filters.revision_id` 指定時のみ `is_current` を外し、非現行版を引ける。
+  既定は従来どおり現行版のみ。
+- 文書画面に改版履歴（CURRENT / SUPERSEDED、切替、原本、この版で検索）。
+  改版 ID を `SearchPage` の `revision` パラメータへ引き継ぐ。
+- `scripts/phase2-revision-eval.py`、`apps/web/scripts/ui-check-phase2-revisions.mjs`
+  （`npm run check:ui:phase2-revisions`）。
+
+### Verification
+
+- v1 / v2 の PDF を登録・解析し、v2 現行時に既定検索は v2 のみ、`revision_id=v1` で
+  v1 の 20 件を取得。v1 へ切替後、既定検索が v1 に反転。
+- 切替で Neo4j の旧版ノード **0**、PG `deleted_at` **101**、切替先 **101**、
+  監査 `document.revision.activate` 1 行、旧版原本はバイト一致。
+- fmt / clippy / test **233** / OpenAPI 一致 / i18n 583 / build / verify-db 001–029 /
+  UI 1440・607（pageerror 0）が緑。
+
+## 2026-11-08 — Phase 8 残件: 共有レート制限・フロントチャネル logout・SCIM ETag/Bulk
+
+### Added
+
+- **共有レート制限**: `AUTH_RATE_LIMIT_BACKEND=pg` で `core.rate_limit_bucket` の
+  固定窓（60 秒）を使い、複数 API で合算する。PG 障害時はメモリへ退避。
+  API 2 本（容量 6）に 3 + 3 回失敗 → 7 回目が両方 429 + `Retry-After` を実測。
+- **フロントチャネルログアウト**: `GET/POST /api/v1/auth/oidc/frontchannel-logout`。
+  `iss` 不一致は 400、`iss` + `sid` 一致で sid のセッションを失効（200）、
+  監査 `auth.sso.frontchannel_logout`。mock IdP のログイン後に `/me` 401 を実測。
+- **SCIM 拡張**: `meta.version` と ETag（If-None-Match 304 / If-Match 412）、
+  Groups PATCH（displayName / members / role）、Bulk（最大 50 操作、`failOnErrors`）、
+  ServiceProviderConfig の bulk / etag を有効化。
+  グループ解除時の SCIM 由来ロール降格（`core.project_member.role_source`、
+  OWNER と手動付与は対象外）。
+- migration `029_enterprise_ops.sql`（`core.rate_limit_bucket` / `role_source`）。
+  OpenAPI に frontchannel-logout を追加。
+- `scripts/phase8-sso-eval.py` に 11 チェックを追加し **50 / 50** へ。
+
+### Verification
+
+- fmt / clippy / test **233** / OpenAPI 一致 / i18n 573 / build / verify-db 001–029 /
+  Phase 8 E2E 50/50 / UI 1440・607（pageerror 0）が緑。
+- SAML / オフサイト WAL / KMS / PG レプリカ / SIEM 側重複排除 / SCIM PUT 完全置換は
+  外部依存・未実装として `docs/phase8/acceptance.md` に明記。
+
+## 2026-11-08 — Phase 3 投影運用: 影ラベル再構築・日次漂流・複数 projector
+
+### Added
+
+- **影ラベル無停止再構築**（detail/07 §5 / G-06 / G-07）:
+  `POST /graph/rebuild` が `Entity__<8hex>` に 1,000 件ずつ投影 → 差分追従 →
+  検証（差分 0）→ ラベル入替 → 旧ラベル削除。`projection_build` に
+  BUILDING / VERIFYING / SWITCHED / FAILED / ABORTED を残す。
+  `POST /projects/{pid}/graph/rebuild/abort` で中止でき、旧グラフは無傷。
+- **日次漂流検出**（G-09 / I-6）: worker が起動時 + 24 時間ごとに PG / Neo4j の
+  件数を比較し `graph_meta.projection_drift` に記録。劣化時は監査
+  `graph.drift.detected`。`GET /graph/stats` に未消費イベント数・直近 drift・
+  最終再構築を追加し、グラフ画面に表示。
+- **複数 projector の並走**: `core.outbox_event` に `locked_by` / `locked_until` を
+  追加し、`FOR UPDATE SKIP LOCKED` の claim リースで配る（stale lock は再取得）。
+  2 worker 並走で重複・欠落 0 を実測。
+- migration `028_graph_projection_ops.sql`、`NewProjectionDrift`、
+  `GraphBuildView` / `GraphDriftView` / `GraphRebuildAbortResponse` 契約。
+  `systivra_scheduler` に `core.project` の SELECT を付与（日次漂流の列挙用）。
+- `scripts/phase3-graph-ops-eval.py`、`apps/web/scripts/ui-check-phase3-ops.mjs`
+  （`npm run check:ui:phase3-ops`）。
+
+### Verification
+
+- E2E: 影ラベル 17 ノード / 12 辺で SWITCHED、ABORT で旧グラフ維持、差分追従で件数一致、
+  漂移 1 件削除 → degraded 検出 + 監査、2 worker が 29 イベントを 4 / 25 で分担。
+- fmt / clippy / test **233** / OpenAPI 一致 / i18n 573 / build / verify-db 001–028 /
+  UI 1440・607（9 チップ、pageerror 0）が緑。
+
 ## 2026-11-08 — Phase 6 正式受入: 24 画面 / 300 ルール・失敗モード・保持・VERIFIES 投影
 
 ### Added

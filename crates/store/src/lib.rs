@@ -37,8 +37,8 @@ pub use document::{
     DocumentFilter, DocumentListRow, DocumentRow, NewDocument, NewRevision, RevisionRow,
 };
 pub use graph::{
-    GraphEdgeRow, GraphEntityRow, GraphNeighborRow, GraphPathRow, GraphSubgraph, OntologyRow,
-    OutboxEvent,
+    GraphEdgeRow, GraphEntityRow, GraphNeighborRow, GraphPathRow, GraphSubgraph,
+    NewProjectionDrift, OntologyRow, OutboxEvent,
 };
 pub use impact::{
     ChangedCodeSymbolRow, ImpactAssessmentRow, ImpactCompletion, ImpactDocumentMentionRow,

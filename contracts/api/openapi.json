@@ -226,6 +226,80 @@
         }
       }
     },
+    "/api/v1/auth/oidc/frontchannel-logout": {
+      "get": {
+        "tags": [
+          "crate::routes::auth"
+        ],
+        "operationId": "oidc_frontchannel_logout",
+        "parameters": [
+          {
+            "name": "iss",
+            "in": "query",
+            "description": "Issuer",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sid",
+            "in": "query",
+            "description": "IdP session ID",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "sid 一致セッションを失効"
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "crate::routes::auth"
+        ],
+        "operationId": "oidc_frontchannel_logout_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FrontChannelLogoutForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "sid 一致セッションを失効"
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/auth/oidc/start": {
       "get": {
         "tags": [
@@ -601,6 +675,93 @@
         "responses": {
           "200": {
             "description": "PDF bytes"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/documents/{did}/revisions": {
+      "get": {
+        "tags": [
+          "crate::routes::document"
+        ],
+        "operationId": "list_document_revisions",
+        "parameters": [
+          {
+            "name": "did",
+            "in": "path",
+            "description": "Document ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionListResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/documents/{did}/revisions/{rid}/content": {
+      "get": {
+        "tags": [
+          "crate::routes::document"
+        ],
+        "operationId": "revision_content",
+        "parameters": [
+          {
+            "name": "did",
+            "in": "path",
+            "description": "Document ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "rid",
+            "in": "path",
+            "description": "Revision ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Revision content"
           },
           "404": {
             "description": "",
@@ -2412,6 +2573,169 @@
         }
       }
     },
+    "/api/v1/projects/{pid}/documents/{did}/revisions": {
+      "post": {
+        "tags": [
+          "crate::routes::document"
+        ],
+        "operationId": "register_revision",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "did",
+            "in": "path",
+            "description": "Document ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterDocumentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterRevisionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{pid}/documents/{did}/revisions/{rid_activate}": {
+      "post": {
+        "tags": [
+          "crate::routes::document"
+        ],
+        "operationId": "activate_revision",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "did",
+            "in": "path",
+            "description": "Document ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "rid_activate",
+            "in": "path",
+            "description": "Revision ID + ':activate'",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionListResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{pid}/documents:bulk-import": {
       "post": {
         "tags": [
@@ -2848,6 +3172,48 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/GraphRebuildResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{pid}/graph/rebuild/abort": {
+      "post": {
+        "tags": [
+          "crate::routes::graph"
+        ],
+        "operationId": "rebuild_abort",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphRebuildAbortResponse"
                 }
               }
             }
@@ -6627,6 +6993,67 @@
           }
         }
       },
+      "FrontChannelLogoutForm": {
+        "type": "object",
+        "properties": {
+          "iss": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sid": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "GraphBuildView": {
+        "type": "object",
+        "required": [
+          "build_id",
+          "status",
+          "shadow_label",
+          "entities_written",
+          "relationships_written"
+        ],
+        "properties": {
+          "build_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "drift_rate": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "entities_written": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "relationships_written": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "shadow_label": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
       "GraphEdge": {
         "type": "object",
         "required": [
@@ -6779,20 +7206,66 @@
           }
         }
       },
+      "GraphRebuildAbortResponse": {
+        "type": "object",
+        "required": [
+          "status",
+          "shadow_deleted"
+        ],
+        "properties": {
+          "build_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "shadow_deleted": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
       "GraphRebuildResponse": {
         "type": "object",
         "required": [
           "entities",
-          "relationships"
+          "relationships",
+          "build_id",
+          "status",
+          "drift_rate",
+          "previous_entities",
+          "previous_relationships"
         ],
         "properties": {
+          "build_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "drift_rate": {
+            "type": "number",
+            "format": "double"
+          },
           "entities": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "previous_entities": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "previous_relationships": {
             "type": "integer",
             "format": "int64"
           },
           "relationships": {
             "type": "integer",
             "format": "int64"
+          },
+          "status": {
+            "type": "string"
           }
         }
       },
@@ -6805,11 +7278,40 @@
           "neo4j_relationships",
           "drift_rate",
           "last_event_seq",
-          "ontology_version"
+          "ontology_version",
+          "pending_events",
+          "drift_degraded"
         ],
         "properties": {
+          "drift_degraded": {
+            "type": "boolean"
+          },
           "drift_rate": {
             "type": "number",
+            "format": "double"
+          },
+          "last_build": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GraphBuildView"
+              }
+            ]
+          },
+          "last_drift_checked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_drift_rate": {
+            "type": [
+              "number",
+              "null"
+            ],
             "format": "double"
           },
           "last_event_seq": {
@@ -6826,6 +7328,10 @@
           },
           "ontology_version": {
             "type": "string"
+          },
+          "pending_events": {
+            "type": "integer",
+            "format": "int64"
           },
           "pg_nodes": {
             "type": "integer",
@@ -9093,6 +9599,21 @@
           }
         }
       },
+      "RegisterRevisionResponse": {
+        "type": "object",
+        "required": [
+          "revision",
+          "next"
+        ],
+        "properties": {
+          "next": {
+            "$ref": "#/components/schemas/NextLinks"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/RevisionSummary"
+          }
+        }
+      },
       "RetokenizeResponse": {
         "type": "object",
         "description": "既存 chunk の `tokenized` を作り直す保守操作の結果。\n`fts` は `tokenized` の生成列なので、更新すれば索引も追随する。",
@@ -9123,6 +9644,20 @@
         "type": "string",
         "format": "uuid",
         "description": "文書の版。"
+      },
+      "RevisionListResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RevisionSummary"
+            }
+          }
+        }
       },
       "RevisionSummary": {
         "type": "object",

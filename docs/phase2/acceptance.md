@@ -79,6 +79,24 @@ cd apps/web && npm run check:ui:phase2
 
 ---
 
+### 2.5 改版管理（2026-11-08 / `scripts/phase2-revision-eval.py`）
+
+同一文書に PDF の v1 / v2 を登録し、解析後に切替と版指定検索を実測。
+
+| 項目 | 実測 |
+|---|---|
+| 改版登録 | `POST /documents/{did}/revisions` で v2 を登録、v1 は `SUPERSEDED` / v2 は `CURRENT` |
+| chunk の現行性 | v1 の chunk は `is_current=false` / `superseded_at` 設定、v2 のみ `true` |
+| 既定検索 | 現行版（v2）の chunk のみ 20 件 |
+| 版指定検索 | `filters.revision_id = v1` で 20 件（非現行版でも引ける） |
+| 切替 | `:activate` で v1 を `CURRENT` へ。既定検索が v1 に切り替わる |
+| グラフ | 切替後、旧 v2 の Neo4j ノード **0**・PG `deleted_at` **101 件**、切替先 v1 のノード **101** |
+| イベント / 監査 | `DocumentRevisionSuperseded` を publish、監査 `document.revision.activate` 1 行 |
+| 原本 | 旧版 `GET /documents/{did}/revisions/{rid}/content` が v1 とバイト一致（1,053,531） |
+| UI | 改版 2 行、CURRENT 1 行、切替ボタンで反転、1440 / 607 で pageerror 0 |
+
+---
+
 ## 3. 実装済み範囲
 
 | 領域 | 実装 |
@@ -104,7 +122,7 @@ cd apps/web && npm run check:ui:phase2
 | モデル rerank | 未実装 | 外部 reranker が無い。ローカル語彙一致のみで `rerank_local_heuristic` を返す |
 | 親子 chunk | 一部実装 | XLSX は親 region chunk + 行 evidence（子は保存しない）。DOCX / PPTX の表は chunk 単位で、行 evidence は未実装 |
 | 部分 HNSW（`WHERE model_id`） | 未実装 | モデル別 embedding は共存するが、HNSW は分区単位の通常索引。モデル切替は `index_build` の active build で行う |
-| 改版履歴 UI / 版指定検索 | 未実装 | Phase 2 の対象外として継続 |
+| 改版履歴 UI / 版指定検索 | **実装** | 文書画面の改版履歴（CURRENT / SUPERSEDED、切替、原本、この版で検索）。API は改版登録 / 一覧 / 原本 / 切替。切替時に旧版のグラフ実体を tombstone し Neo4j からも削除（`DocumentRevisionSuperseded`）。検索は `filters.revision_id` 指定時のみ非現行版を対象にする |
 | 1,000 冊 / 1,200 万 chunk の負荷試験 | 未実施 | ローカル環境に 12M chunk のデータセットが無い。P95 は 109〜1,509 chunk で 40〜43ms |
 | S3 / MinIO | 未使用 | ローカル FS のまま。`upload_url` / `object_key` の契約は不変 |
 | 和暦 / 縦書き / ルビ | 未実装 | Phase 2 の範囲外 |

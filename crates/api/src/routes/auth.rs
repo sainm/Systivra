@@ -38,6 +38,10 @@ pub fn public_router() -> Router<ApiState> {
             "/api/v1/auth/oidc/backchannel-logout",
             post(oidc_backchannel_logout),
         )
+        .route(
+            "/api/v1/auth/oidc/frontchannel-logout",
+            get(oidc_frontchannel_logout).post(oidc_frontchannel_logout_post),
+        )
         .route("/api/v1/auth/config", get(auth_config))
         .route("/api/v1/auth/oidc/start", get(oidc_start))
         .route("/api/v1/auth/oidc/callback", get(oidc_callback))
@@ -131,6 +135,103 @@ pub(crate) async fn oidc_backchannel_logout(
     }
     tracing::info!(revoked, "back-channel logout applied");
     Ok(StatusCode::OK)
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct FrontChannelLogoutQuery {
+    pub iss: Option<String>,
+    pub sid: Option<String>,
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct FrontChannelLogoutForm {
+    pub iss: Option<String>,
+    pub sid: Option<String>,
+}
+
+async fn frontchannel_logout(
+    state: &ApiState,
+    trace: &TraceId,
+    iss: Option<String>,
+    sid: Option<String>,
+) -> Result<StatusCode, ApiError> {
+    let expected = std::env::var("OIDC_ISSUER").unwrap_or_default();
+    if expected.is_empty() {
+        return Err(
+            ApiError::new(ErrorCode::AuthSsoUnavailable, trace).detail("SSO is not configured")
+        );
+    }
+    let (Some(iss), Some(sid)) = (iss, sid.filter(|value| !value.is_empty())) else {
+        return Err(
+            ApiError::new(ErrorCode::ValidationSchema, trace).detail("iss and sid are required")
+        );
+    };
+    if iss != expected {
+        return Err(ApiError::new(ErrorCode::ValidationSchema, trace).detail("issuer mismatch"));
+    }
+    let revoked = state
+        .app
+        .revoke_identity_sessions(&expected, None, Some(&sid))
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "front-channel logout failed");
+            ApiError::new(ErrorCode::Internal, trace)
+        })?;
+    if let Err(e) = state
+        .app
+        .record_auth_audit(&app::AuthAudit {
+            project: None,
+            actor: None,
+            action: "auth.sso.frontchannel_logout",
+            result: "SUCCESS",
+            provider: &expected,
+            subject: None,
+            reason: Some(&sid),
+            trace_id: Some(trace.as_str()),
+        })
+        .await
+    {
+        tracing::error!(error = %e, "front-channel logout audit failed");
+    }
+    tracing::info!(revoked, "front-channel logout applied");
+    Ok(StatusCode::OK)
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/auth/oidc/frontchannel-logout",
+    params(
+        ("iss" = Option<String>, Query, description = "Issuer"),
+        ("sid" = Option<String>, Query, description = "IdP session ID")
+    ),
+    responses(
+        (status = 200, description = "sid 一致セッションを失効"),
+        (status = 400, body = contracts::Problem)
+    )
+)]
+pub(crate) async fn oidc_frontchannel_logout(
+    State(state): State<ApiState>,
+    Extension(trace): Extension<TraceId>,
+    Query(query): Query<FrontChannelLogoutQuery>,
+) -> Result<StatusCode, ApiError> {
+    frontchannel_logout(&state, &trace, query.iss, query.sid).await
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/auth/oidc/frontchannel-logout",
+    request_body = FrontChannelLogoutForm,
+    responses(
+        (status = 200, description = "sid 一致セッションを失効"),
+        (status = 400, body = contracts::Problem)
+    )
+)]
+pub(crate) async fn oidc_frontchannel_logout_post(
+    State(state): State<ApiState>,
+    Extension(trace): Extension<TraceId>,
+    Form(form): Form<FrontChannelLogoutForm>,
+) -> Result<StatusCode, ApiError> {
+    frontchannel_logout(&state, &trace, form.iss, form.sid).await
 }
 
 #[utoipa::path(

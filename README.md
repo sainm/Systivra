@@ -18,7 +18,9 @@ P95 39ms。1,000 冊 / 1,200 万 chunk の負荷試験、docling-serve、pg_bigm
 Ontology v1（56 実体型 / 27 関係型）、PG 正本 + Outbox + Neo4j 投影（冪等・順序保証）、
 実体検索 / 隣接 / 経路 / サブグラフ / トレーサビリティ、PgGraphProvider lite（3 ホップ）、
 Ontology 閲覧・公開とグラフブラウザを実装。10 万ノードの隣接は合成データで P95 5.3ms。
-影ラベル再構築、日次漂流検出、投影器 10 分停止は未実施または降格（同記録に明記）。
+影ラベル無停止再構築（G-06 / G-07）、日次漂流検出とグラフ完全性表示（G-09）、
+複数 projector の並走（claim リース）を実装し、`scripts/phase3-graph-ops-eval.py` で実測した。
+投影器 10 分停止と Neo4j 10 万ノード投影は未実施（`docs/phase3/acceptance.md`）。
 Neo4j のローカル検証は 2026.05 Community で、設計の 5.26 LTS とは版が異なる。
 
 **Phase 4（Code Analysis）の source-only 受入は PASS**。`DIR` / `SNAPSHOT` / `GIT` の
@@ -90,11 +92,14 @@ worker も実行のたびにロールを引き直す（降格を即時反映）�
 clean-room の graph rebuild まで行う（RTO 5.2 秒）。`scripts/pitr-drill.sh` は専用の
 一時クラスタで WAL アーカイブと指定時刻復元を実測する（2.85 秒）。
 OIDC は discovery / JWKS / 認可コード + PKCE(S256) / state / nonce を検証し、
-mock IdP の E2E 39/39・ログイン 10〜13ms。logout / back-channel logout 後の Cookie 再利用は
-401。セッション一覧・個別失効・全失効・アイドル期限を実装。認証 3 経路は IP 単位で制限し、
-連続失敗は `429 AUTH_RATE_LIMITED` + `Retry-After`。全応答にセキュリティヘッダを付け、
-パスワードログインの成否も監査に残す。SCIM Users / Groups とグループ→ロール同期、
-ユーザー管理画面、監査の SIEM 転送を追加した。受入は
+mock IdP の E2E 50/50・ログイン 10〜13ms。logout / back-channel logout / フロントチャネル
+logout 後の Cookie 再利用は 401。セッション一覧・個別失効・全失効・アイドル期限を実装。
+認証 3 経路は IP 単位で制限し、連続失敗は `429 AUTH_RATE_LIMITED` + `Retry-After`。
+`AUTH_RATE_LIMIT_BACKEND=pg` で共有ストアの固定窓になり、2 API で合算されることを実測。
+全応答にセキュリティヘッダを付け、パスワードログインの成否も監査に残す。
+SCIM Users / Groups（ETag / Groups PATCH / Bulk / グループ解除時の降格）、
+ユーザー管理画面、監査の SIEM 転送を追加した。DB ロールは `BYPASSRLS` を使わず、
+scheduler の横断閲覧を `scheduler_scope` 方針（4 表の許可リスト）で表現する（Azure 対応）。受入は
 [`docs/phase8/acceptance.md`](docs/phase8/acceptance.md)、運用手順は
 [`docs/phase8/operations.md`](docs/phase8/operations.md)。SAML / 真の HA /
 本番 WAL 常時転送は未完了のため、**Phase 8 全体受入は未完了**。
@@ -138,11 +143,11 @@ db / api / worker / web を起動し、コンテナ経由の E2E まで通して
 
 ```bash
 cargo test --workspace
-PGHOST=localhost PGUSER=postgres ./scripts/verify-db.sh   # 空 DB に 001〜027 を適用して RLS / 分区 / graph / code / impact / test / ai / inquiry / sso / session / scim を確認
+PGHOST=localhost PGUSER=postgres ./scripts/verify-db.sh   # 空 DB に 001〜029 を適用して RLS / 分区 / graph / code / impact / test / ai / inquiry / sso / session / scim / 投影運用 / Enterprise 残件を確認
 
 各 phase の受入表に書かれた `001〜0xx` や i18n キー数・ツール実行本数は、
 その phase を検証した時点の値（履歴）である。現行の `scripts/verify-db.sh` は
-**001〜027** を順に適用し、i18n は 564 キー。現行値は
+**001〜029** を順に適用し、i18n は 583 キー。現行値は
 [`docs/phase7/acceptance.md`](docs/phase7/acceptance.md) の §1・§2 を正本とする。
 cargo run -p api --bin openapi -- --check                 # 生成 spec とコミット済み spec の一致
 cd apps/web && npm ci && npm run check:i18n && npm run build
@@ -174,7 +179,8 @@ BACKUP_ENCRYPTION_KEY=<passphrase> ./scripts/backup.sh      # PG + 原本 + mani
 BACKUP_ENCRYPTION_KEY=<passphrase> CLEAN_ROOM=1 ./scripts/restore-drill.sh  # 復号・別 DB 復元・clean-room rebuild
 ./scripts/pitr-drill.sh                                    # 一時クラスタで WAL アーカイブ + 指定時刻復元
 python3 scripts/phase8-sso-eval.py                         # SSO / back-channel / SCIM / セッション / 429（要 cargo build）
-./scripts/phase8-siem-eval.sh                              # 監査 NDJSON の SIEM 転送とカーソル
+./scripts/phase8-siem-eval.sh
+scripts/scheduler-rls-eval.py scheduler の NOBYPASSRLS 下でのジョブ・保守処理の受入                              # 監査 NDJSON の SIEM 転送とカーソル
 cd apps/web && npm run check:ui:phase8                     # ログイン / セキュリティ / ユーザー（要 API + Vite）
 ```
 
@@ -205,6 +211,12 @@ cd apps/web && npm run dev     # http://localhost:15173
 #   NEO4J_URI / NEO4J_USER / NEO4J_PASSWORD / NEO4J_DATABASE で接続先を指定
 ```
 
+**Azure Database for PostgreSQL を使う場合**は
+[`deployment/azure/README.md`](deployment/azure/README.md) を参照。
+拡張の許可リスト（`vector`）、`sslmode=require`、PITR の扱い、組み込み接続プールを
+使ってはいけない理由が書いてある。roles.sql は BYPASSRLS を使わない実装なので、
+Azure の PG16 / PG15 どちらでも動く。
+
 ヘルスチェック：`curl -i localhost:18080/healthz`（DB 非依存）/ `readyz`（DB 依存）。
 `docker-compose.yml` は db + neo4j + api + worker + web。Docker がある環境では `docker compose up` で
 `http://localhost:3000` にログイン画面が出る（A-01 の条件付き項目。Neo4j 込みの構成は未検証）。
@@ -215,7 +227,7 @@ cd apps/web && npm run dev     # http://localhost:15173
 crates/                    13 crate（domain / contracts / store / providers /
                            engine-rag / engine-graph / engine-code / engine-impact /
                            engine-test / runtime / app / api / worker）
-migrations/                001〜024（core / corpus / job_event / project_of / index_build / graph / code / impact / test / ai / inquiry / sso / session / scim / code repair）
+migrations/                001〜029（core / corpus / job_event / project_of / index_build / graph / code / impact / test / ai / inquiry / sso / session / scim / code repair / 投影運用 / Enterprise 残件）
 deployment/postgres/       roles.sql（3 ロール + 権限。冪等）
 deployment/docker/         API / worker の Dockerfile
 apps/web/                  Vite + React + Tailwind。Dockerfile は nginx 配信
@@ -226,6 +238,7 @@ scripts/verify-db.sh       空 DB に全マイグレーションを適用し RLS
 scripts/seed-dev.sh        開発ユーザーとプロジェクト
 scripts/make-fixture.sh    100 ページ日本語 PDF fixture
 scripts/phase2-eval.py     Phase 2 の 60 問評価と 30 セル領域の top-3 測定
+scripts/phase2-revision-eval.py 改版登録 / 切替 / 版指定検索 / graph tombstone の E2E
 scripts/seed-phase4.sh     Phase 4 の 12 ファイル SAMPLE
 scripts/phase4-eval.py     コード同期 / 解析 / 増分 / COPY / 元バイト evidence の API E2E
 scripts/phase4-git-eval.py ローカル bare Git の clone / fetch / SHA / 同期失敗 E2E
@@ -235,6 +248,7 @@ scripts/seed-phase5-doc.sql Phase 5 のコード・文書 evidence 接続用 fix
 scripts/phase5-impact-eval.py ENTITY / DIFF / 冪等 / evidence の API E2E
 scripts/phase5-golden-eval.py 20 変更 Golden set の recall / precision / evidence
 scripts/phase5-inquiry-eval.py Q-01 SSE / SSE 再開 / Markdown / PDF / 計画化
+scripts/phase3-graph-ops-eval.py 影ラベル再構築 / 日次漂流 / 複数 projector の E2E
 scripts/phase6-test-eval.py   Phase 6 ルール / 派生 / 承認 / 被覆 / 欠陥候補の API E2E
 scripts/phase6-runner-eval.py 100 ケース / 4 並列の Runner 受入と成果物 / HAR
 scripts/phase6-failure-eval.py §13 失敗モード / storage_state / seed / reset / 環境ロック
@@ -246,7 +260,9 @@ scripts/phase7-agent-loop-eval.py Agent ツール呼び出し + Q-01 推定層 /
 scripts/phase7-mcp-eval.py  外部 MCP stdio / HTTP / Schema 変化 / 失敗境界の E2E
 apps/web/scripts/e2e.mjs   ログイン → 取込 → 解析 → 検索 → 原文ハイライトのブラウザ受入
 apps/web/scripts/ui-check-phase2.mjs  Explorer / 索引管理 / 検索検査のブラウザ受入
+apps/web/scripts/ui-check-phase2-revisions.mjs 改版履歴 / 切替のブラウザ受入
 apps/web/scripts/ui-check-phase3.mjs  グラフ / Ontology / 公開のブラウザ受入
+apps/web/scripts/ui-check-phase3-ops.mjs グラフ完全性 / 再構築状態のブラウザ受入
 apps/web/scripts/ui-check-phase4.mjs  コード解析 / 品質警告 / Fact evidence のブラウザ受入
 apps/web/scripts/ui-check-phase5.mjs  影響 Draft / evidence / 狭幅レイアウトのブラウザ受入
 apps/web/scripts/ui-check-phase6.mjs  テスト工学 / 被覆 5 指標 / 狭幅レイアウトのブラウザ受入

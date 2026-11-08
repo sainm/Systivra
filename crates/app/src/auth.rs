@@ -194,6 +194,22 @@ impl App {
         Ok(revoked)
     }
 
+    /// 共有レート制限。上限超過なら Retry-After 秒を返す。
+    pub async fn check_auth_rate(
+        &self,
+        key: &str,
+        capacity: i64,
+        window_seconds: i64,
+    ) -> Result<Option<u64>, AuthError> {
+        let mut tx = self.store().begin_unscoped().await?;
+        let (count, retry_after) = self
+            .store()
+            .hit_rate_limit(&mut tx, key, window_seconds)
+            .await?;
+        store::commit(tx).await?;
+        Ok((count > capacity).then_some(retry_after.max(1) as u64))
+    }
+
     /// 期限切れ・失効済みセッションの掃除。
     pub async fn cleanup_sessions(&self, older_than_days: i64) -> Result<u64, AuthError> {
         let mut tx = self.store().begin_unscoped().await?;

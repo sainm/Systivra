@@ -9,6 +9,13 @@
 # 接続は libpq の標準環境変数（PGHOST / PGPORT / PGUSER / PGPASSWORD）に従う。
 # 一時 DB（systivra_verify_<pid>）を作り、最後に必ず消す。
 # 前提: psql が PATH にあり、管理者権限のロールで接続できること。
+#
+# **Azure Database for PostgreSQL では実行しないこと。** 管理インスタンス上で
+# CREATE / DROP DATABASE を繰り返すことになり、追加課金とゴミが残る。
+# 空 DDL の検証はローカル（またはコンテナ）の PostgreSQL で行う。
+# Azure 向けの接続情報は `deployment/azure/README.md` を参照。
+#   例: PGUSER='<admin>@<server>' PGHOST=<server>.postgres.database.azure.com \
+#         PGPORT=5432 PGDATABASE=systivra PGPASSWORD=... ./scripts/verify-db.sh
 
 set -euo pipefail
 
@@ -84,8 +91,49 @@ psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/026_workflow_actor.sql"
 ok "026_workflow_actor.sql"
 psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/027_approval_consume.sql"
 ok "027_approval_consume.sql"
+psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/028_graph_projection_ops.sql"
+ok "028_graph_projection_ops.sql"
+psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/029_enterprise_ops.sql"
+ok "029_enterprise_ops.sql"
 psql -v ON_ERROR_STOP=1 -q -f "$ROOT/deployment/postgres/roles.sql"
 ok "roles.sql（migrations の後）"
+
+# scheduler は BYPASSRLS を使わず、方針で横断閲覧する（Azure でも動かすため）。
+n=$(psql -tAc "SELECT rolbypassrls FROM pg_roles WHERE rolname='systivra_scheduler';")
+[ "$n" = "f" ] && ok "scheduler は BYPASSRLS を持たない" || no "scheduler が BYPASSRLS を持っている（${n:-空}）"
+n=$(psql -tAc "SELECT count(*) FROM pg_policies
+  WHERE policyname='scheduler_scope'
+    AND (schemaname||'.'||tablename) IN
+        ('core.job','core.project','ai.approval_request','test.test_execution');")
+[ "$n" = "4" ] && ok "横断閲覧の方針が 4 表にある" || no "scheduler_scope が足りない（${n:-0}）"
+# app は方針の対象外。横断閲覧できないことを確認する。
+n=$(psql -tAc "SELECT count(*) FROM pg_policies
+  WHERE policyname='scheduler_scope' AND 'systivra_app' = ANY(roles);")
+[ "$n" = "0" ] && ok "方針は app に適用されない" || no "app に横断方針が付いている（${n}）"
+
+# 028: 投影運用（claim リース / 日次漂流）
+n=$(psql -tAc "SELECT count(*) FROM information_schema.columns
+  WHERE table_schema='core' AND table_name='outbox_event'
+    AND column_name IN ('locked_by','locked_until');")
+[ "$n" = "2" ] && ok "outbox_event に claim リース列がある" || no "claim リース列が足りない（${n:-0}）"
+n=$(psql -tAc "SELECT count(*) FROM pg_indexes
+  WHERE schemaname='core' AND indexname='outbox_claim_idx';")
+[ "$n" = "1" ] && ok "未投影イベントの claim 索引がある" || no "outbox_claim_idx が無い"
+n=$(psql -tAc "SELECT relrowsecurity FROM pg_class WHERE oid='graph_meta.projection_drift'::regclass;")
+[ "$n" = "t" ] && ok "projection_drift は RLS 有効" || no "projection_drift の RLS が無効"
+n=$(psql -tAc "SELECT has_table_privilege('systivra_worker','graph_meta.projection_drift','INSERT');")
+[ "$n" = "t" ] && ok "worker は漂流を記録できる（INSERT）" || no "worker が projection_drift に INSERT できない"
+
+# 029: Enterprise 残件（共有レート制限 / SCIM ロールの由来）
+n=$(psql -tAc "SELECT has_table_privilege('systivra_app','core.rate_limit_bucket','UPDATE');")
+[ "$n" = "t" ] && ok "app は共有レート制限を更新できる（UPDATE）" || no "app が rate_limit_bucket を更新できない"
+n=$(psql -tAc "SELECT column_default FROM information_schema.columns
+  WHERE table_schema='core' AND table_name='project_member' AND column_name='role_source';")
+[ "$n" = "'MANUAL'::text" ] && ok "role_source の既定は MANUAL" || no "role_source の既定が違う（${n:-空}）"
+n=$(psql -tAc "SELECT count(*) FROM pg_constraint
+  WHERE conrelid='core.project_member'::regclass AND contype='c'
+    AND pg_get_constraintdef(oid) LIKE '%role_source%';")
+[ "$n" = "1" ] && ok "role_source は MANUAL / SCIM に制約される" || no "role_source の CHECK が無い"
 
 say "== RLS =="
 psql -q >/dev/null <<'SQL'
@@ -152,6 +200,9 @@ n=$(psql -tAc "SELECT count(*) FROM corpus.embedding_model;")
 
 n=$(psql -tAc "SELECT has_table_privilege('systivra_scheduler','core.job','INSERT');")
 [ "$n" = "t" ] && ok "scheduler は子ジョブを投入できる" || no "scheduler が core.job に INSERT できない"
+
+n=$(psql -tAc "SELECT has_table_privilege('systivra_scheduler','core.session','DELETE');")
+[ "$n" = "t" ] && ok "scheduler は期限切れセッションを掃除できる（DELETE）" || no "scheduler が core.session を DELETE できない"
 
 n=$(psql -tAc "SELECT count(*) FROM pg_policies WHERE schemaname='corpus';")
 [ "${n:-0}" -ge 9 ] && ok "corpus の RLS ポリシーが $n 個ある" || no "ポリシーが足りない（${n:-0}）"
@@ -296,7 +347,8 @@ n=$(psql -tAc "SELECT count(*) FROM pg_class WHERE relnamespace='test'::regnames
 [ "$n" = "11" ] && ok "test の $n 表で RLS 有効" || no "test の RLS 有効表が違う（${n:-0}）"
 
 n=$(psql -tAc "SELECT count(*) FROM pg_policies WHERE schemaname='test';")
-[ "$n" = "11" ] && ok "test の RLS ポリシーが $n 個ある" || no "test ポリシーが足りない（${n:-0}）"
+# 12 = テナント方針 11 + scheduler の横断方針 1（test.test_execution）
+[ "$n" = "12" ] && ok "test の RLS ポリシーが $n 個ある" || no "test ポリシーが足りない（${n:-0}）"
 
 n=$(psql -tAc "SELECT has_table_privilege('systivra_worker','test.test_execution','UPDATE');")
 [ "$n" = "t" ] && ok "worker は test_execution を更新できる" || no "worker が test_execution を更新できない"
@@ -330,7 +382,8 @@ n=$(psql -tAc "SELECT count(*) FROM pg_class WHERE relnamespace='ai'::regnamespa
 [ "$n" = "10" ] && ok "ai の $n 表で RLS 有効" || no "ai の RLS 有効表が違う（${n:-0}）"
 
 n=$(psql -tAc "SELECT count(*) FROM pg_policies WHERE schemaname='ai';")
-[ "$n" = "10" ] && ok "ai の RLS ポリシーが $n 個ある" || no "ai ポリシーが足りない（${n:-0}）"
+# 11 = テナント方針 10 + scheduler の横断方針 1（ai.approval_request）
+[ "$n" = "11" ] && ok "ai の RLS ポリシーが $n 個ある" || no "ai ポリシーが足りない（${n:-0}）"
 
 n=$(psql -tAc "SELECT has_table_privilege('systivra_worker','ai.agent_run','UPDATE');")
 [ "$n" = "t" ] && ok "worker は ai.agent_run を更新できる" || no "worker が ai.agent_run を更新できない"

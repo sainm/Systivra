@@ -26,10 +26,15 @@
 |---|---|---|---|
 | `systivra_app` | API プロセス | `SELECT` / `INSERT`（全 `core` 表）、`UPDATE` は業務表のみ | `core.job` の `UPDATE`（取り出しは worker の仕事） |
 | `systivra_worker` | worker / projector | `core.job` / `job_checkpoint` / `outbox_event` / `outbox_dead_letter` の `UPDATE` | 業務表の書き込み（store 経由に限る） |
-| `systivra_scheduler` | ジョブ取り出しのみ | `core.job` の `UPDATE` + **`BYPASSRLS`** | それ以外の全テーブル |
+| `systivra_scheduler` | ジョブ取り出しのみ | `core.job` の `UPDATE` + `scheduler_scope` 方針（横断閲覧） | それ以外の全テーブル |
 
 - `core.audit_log` は**どれにも `UPDATE` / `DELETE` を渡さない**。追記専用を権限で担保する。
-- RLS はロールを問わず効く。`systivra_app` / `systivra_worker` は必ず `SET LOCAL app.project_id` を設定する。全プロジェクト横断で取り出す必要があるのは**取り出しクエリだけ**なので、そこだけ `BYPASSRLS` の `systivra_scheduler` に閉じる（`detail/09` §3 の 2 プロセス構成と対応）。
+- RLS はロールを問わず効く。`systivra_app` / `systivra_worker` は必ず `SET LOCAL app.project_id` を設定する。全プロジェクト横断で取り出す必要があるのは**取り出しクエリだけ**なので、その範囲を `systivra_scheduler` に閉じる（`detail/09` §3 の 2 プロセス構成と対応）。
+- **横断閲覧は `BYPASSRLS` ではなく RLS 方針で表現する。** `deployment/postgres/roles.sql` が `scheduler_scope`（`FOR ALL TO systivra_scheduler USING (true)`）を許可リストの 4 表（`core.job` / `core.project` / `ai.approval_request` / `test.test_execution`）に張る。
+  - 理由 1: **マネージド PG では属性を付けられない場合がある。** Azure Database for PostgreSQL は PG16 未満、admin（`azure_pg_admin`）が非管理者ロールに `BYPASSRLS` を付与できない。RDS / Cloud SQL も制約が異なる。
+  - 理由 2: 方針は `pg_policies` に並ぶので、**「誰が何を横断できるか」が一覧できる**。ロール属性は `\du` しないと見えない。
+  - 方針は権限を付けない。RLS はフィルタのみで、`GRANT` は roles.sql の第 2 / 3 節が管轄。`USING (true)` を書いても元の `GRANT` 以上は触れない。
+  - 縦覧したい表が増えたら **roles.sql の許可リストに追加する**（`verify-db.sh` が件数を検査する）。
 - ロール名は環境で変わりうるため、マイグレーションの `REVOKE` は `pg_roles` に存在するときだけ適用する（`002_core_ops.sql` の `DO` ブロック）。
 
 ---

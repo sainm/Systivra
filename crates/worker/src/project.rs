@@ -9,6 +9,16 @@ use uuid::Uuid;
 
 static PROJECTOR: OnceLock<Option<Neo4jProjector>> = OnceLock::new();
 static SCHEMA_READY: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+static WORKER_ID: OnceLock<String> = OnceLock::new();
+
+fn worker_id() -> &'static str {
+    WORKER_ID.get_or_init(|| {
+        std::env::var("WORKER_ID")
+            .ok()
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| Uuid::new_v4().to_string())
+    })
+}
 
 fn projector() -> Option<&'static Neo4jProjector> {
     PROJECTOR
@@ -45,8 +55,16 @@ pub async fn drain(app: &App) -> Result<(), app::AppError> {
     }
 
     let scope = ProjectId(Uuid::nil());
+    let claim_limit = std::env::var("GRAPH_CLAIM_LIMIT")
+        .ok()
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(5_000)
+        .clamp(1, 5_000);
     let mut tx = app.store().begin_scoped(scope).await?;
-    let events = app.store().pending_graph_events(&mut tx, 5_000).await?;
+    let events = app
+        .store()
+        .claim_graph_events(&mut tx, worker_id(), claim_limit)
+        .await?;
     app::commit_tx(tx).await?;
     if events.is_empty() {
         return Ok(());
@@ -110,6 +128,7 @@ pub async fn drain(app: &App) -> Result<(), app::AppError> {
                 | "EntityUpserted"
                 | "RelationshipUpserted"
                 | "ProjectionTombstone"
+                | "DocumentRevisionSuperseded"
         ) {
             continue;
         }
@@ -119,7 +138,9 @@ pub async fn drain(app: &App) -> Result<(), app::AppError> {
         ));
     }
     for event in &events {
-        if event.event_type != "ProjectionTombstone" {
+        if event.event_type != "ProjectionTombstone"
+            && event.event_type != "DocumentRevisionSuperseded"
+        {
             continue;
         }
         match projector
@@ -163,7 +184,7 @@ pub async fn drain(app: &App) -> Result<(), app::AppError> {
             *state = (event.seq, event.event_id);
         }
     }
-    for (project_id, (seq, event_id)) in states {
+    for (&project_id, &(seq, event_id)) in &states {
         if let Err(error) = projector
             .apply_projection_state(project_id, seq, event_id)
             .await
@@ -172,24 +193,9 @@ pub async fn drain(app: &App) -> Result<(), app::AppError> {
         }
     }
 
-    let event_by_id = events
-        .iter()
-        .map(|event| (event.event_id, event))
-        .collect::<BTreeMap<_, _>>();
     let mut tx = app.store().begin_scoped(scope).await?;
     for event_id in &published {
         app.store().mark_event_published(&mut tx, *event_id).await?;
-        let Some(event) = event_by_id.get(event_id) else {
-            continue;
-        };
-        if let Some(project) = project_id_from_payload(&event.payload) {
-            if failed_projects.contains(&project) {
-                continue;
-            }
-            app.store()
-                .update_projection_state(&mut tx, project, event.seq, event.event_id)
-                .await?;
-        }
     }
     for (event_id, error) in &failed {
         let dead = app
@@ -201,6 +207,16 @@ pub async fn drain(app: &App) -> Result<(), app::AppError> {
         }
     }
     app::commit_tx(tx).await?;
+
+    // projection_state は RLS のテナント方針で守られるため、
+    // プロジェクトごとにスコープを設定した tx で書く。
+    for (project_id, (seq, event_id)) in states {
+        let mut tx = app.store().begin_scoped(ProjectId(project_id)).await?;
+        app.store()
+            .update_projection_state(&mut tx, project_id, seq, event_id)
+            .await?;
+        app::commit_tx(tx).await?;
+    }
 
     tracing::info!(
         published = published.len(),

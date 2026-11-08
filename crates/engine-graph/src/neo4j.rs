@@ -134,6 +134,19 @@ impl Neo4jProjector {
                 )
                 .await?;
             }
+            "DocumentRevisionSuperseded" => {
+                let project_id = required_str(payload, "project_id")?;
+                let old_revision = required_str(payload, "old_revision")?;
+                self.run(
+                    "MATCH (e:Entity {project_id: $project_id, revision: $old_revision})
+                     DETACH DELETE e",
+                    value_map!({
+                        "project_id": project_id,
+                        "old_revision": old_revision,
+                    }),
+                )
+                .await?;
+            }
             "RelationshipUpserted" => {
                 let rel_id = required_str(payload, "rel_id")?;
                 let src_uid = required_str(payload, "src_uid")?;
@@ -221,6 +234,15 @@ impl Neo4jProjector {
     }
 
     pub async fn apply_entities(&self, entities: &[EntityProjection]) -> Result<(), GraphError> {
+        self.apply_entities_as("Entity", entities).await
+    }
+
+    pub async fn apply_entities_as(
+        &self,
+        label: &str,
+        entities: &[EntityProjection],
+    ) -> Result<(), GraphError> {
+        label_ident(label)?;
         if entities.is_empty() {
             return Ok(());
         }
@@ -245,8 +267,9 @@ impl Neo4jProjector {
             })
             .collect::<Vec<_>>();
         self.run(
-            "UNWIND $rows AS row
-             MERGE (e:Entity {uid: row.uid})
+            &format!(
+                "UNWIND $rows AS row
+             MERGE (e:{label} {{uid: row.uid}})
              ON CREATE SET e.projection_seq = row.seq
              WITH e, row
              WHERE e.projection_seq <= row.seq
@@ -259,7 +282,8 @@ impl Neo4jProjector {
                  e.revision = row.revision,
                  e.resolution = row.resolution,
                  e.projection_seq = row.seq,
-                 e.deleted_at = null",
+                 e.deleted_at = null"
+            ),
             value_map!({"rows": rows}),
         )
         .await
@@ -270,6 +294,17 @@ impl Neo4jProjector {
         rel_type: &str,
         relationships: &[RelationshipProjection],
     ) -> Result<(), GraphError> {
+        self.apply_relationships_as("Entity", rel_type, relationships)
+            .await
+    }
+
+    pub async fn apply_relationships_as(
+        &self,
+        label: &str,
+        rel_type: &str,
+        relationships: &[RelationshipProjection],
+    ) -> Result<(), GraphError> {
+        label_ident(label)?;
         if relationships.is_empty() {
             return Ok(());
         }
@@ -301,7 +336,7 @@ impl Neo4jProjector {
             .collect::<Vec<_>>();
         let query = format!(
             "UNWIND $rows AS row
-             MATCH (a:Entity {{uid: row.src_uid}}), (b:Entity {{uid: row.dst_uid}})
+             MATCH (a:{label} {{uid: row.src_uid}}), (b:{label} {{uid: row.dst_uid}})
              MERGE (a)-[r:{rel_type} {{rel_id: row.rel_id}}]->(b)
              ON CREATE SET r.projection_seq = row.seq
              WITH r, row
@@ -313,6 +348,72 @@ impl Neo4jProjector {
                  r.projection_seq = row.seq"
         );
         self.run(&query, value_map!({"rows": rows})).await
+    }
+
+    pub async fn count_label(
+        &self,
+        project_id: &str,
+        label: &str,
+    ) -> Result<(i64, i64), GraphError> {
+        label_ident(label)?;
+        let result = self
+            .driver
+            .execute_query(&format!(
+                "MATCH (e:{label} {{project_id: $project_id}})
+                 OPTIONAL MATCH (e)-[r]->(:{label} {{project_id: $project_id}})
+                 RETURN count(DISTINCT e) AS nodes, count(DISTINCT r) AS rels"
+            ))
+            .with_database(self.database.clone())
+            .with_parameters(value_map!({"project_id": project_id}))
+            .run_with_retry(ExponentialBackoff::default())
+            .map_err(|error| GraphError::Neo4j(error.to_string()))?;
+        let mut record = result
+            .records
+            .into_iter()
+            .next()
+            .ok_or_else(|| GraphError::Neo4j("集計結果が空です".into()))?;
+        let nodes = match record.take_value("nodes") {
+            Some(ValueReceive::Integer(value)) => value,
+            _ => 0,
+        };
+        let rels = match record.take_value("rels") {
+            Some(ValueReceive::Integer(value)) => value,
+            _ => 0,
+        };
+        Ok((nodes, rels))
+    }
+
+    pub async fn switch_label(
+        &self,
+        project_id: &str,
+        shadow_label: &str,
+        old_label: &str,
+    ) -> Result<(), GraphError> {
+        label_ident(shadow_label)?;
+        label_ident(old_label)?;
+        self.run(
+            &format!(
+                "MATCH (o:Entity {{project_id: $project_id}})
+                 SET o:{old_label}
+                 REMOVE o:Entity
+                 WITH count(o) AS old_nodes
+                 MATCH (n:{shadow_label} {{project_id: $project_id}})
+                 SET n:Entity
+                 REMOVE n:{shadow_label}
+                 RETURN old_nodes, count(n) AS new_nodes"
+            ),
+            value_map!({"project_id": project_id}),
+        )
+        .await
+    }
+
+    pub async fn delete_label(&self, project_id: &str, label: &str) -> Result<(), GraphError> {
+        label_ident(label)?;
+        self.run(
+            &format!("MATCH (n:{label} {{project_id: $project_id}}) DETACH DELETE n"),
+            value_map!({"project_id": project_id}),
+        )
+        .await
     }
 
     pub async fn apply_projection_state(
@@ -421,6 +522,20 @@ fn parse_uri(uri: &str) -> Result<(String, u16), GraphError> {
         return Err(GraphError::Uri(uri.to_string()));
     }
     Ok((host.to_string(), port))
+}
+
+fn label_ident(label: &str) -> Result<&str, GraphError> {
+    if !label.is_empty()
+        && label
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        Ok(label)
+    } else {
+        Err(GraphError::Payload(format!(
+            "ラベルが識別子ではありません: {label}"
+        )))
+    }
 }
 
 #[cfg(test)]

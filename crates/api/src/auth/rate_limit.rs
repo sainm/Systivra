@@ -32,7 +32,14 @@ pub struct RateLimiter {
     capacity: f64,
     refill_per_sec: f64,
     trust_proxy: bool,
+    backend: Backend,
     buckets: Mutex<HashMap<String, Bucket>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Backend {
+    Memory,
+    Pg,
 }
 
 impl RateLimiter {
@@ -43,7 +50,13 @@ impl RateLimiter {
         let trust_proxy = std::env::var("TRUST_PROXY")
             .map(|v| v == "1")
             .unwrap_or(false);
-        Self::new(capacity, refill_per_min / 60.0, trust_proxy)
+        let backend = match std::env::var("AUTH_RATE_LIMIT_BACKEND").as_deref() {
+            Ok("pg") => Backend::Pg,
+            _ => Backend::Memory,
+        };
+        let mut limiter = Self::new(capacity, refill_per_min / 60.0, trust_proxy);
+        limiter.backend = backend;
+        limiter
     }
 
     pub fn new(capacity: f64, refill_per_sec: f64, trust_proxy: bool) -> Self {
@@ -51,8 +64,27 @@ impl RateLimiter {
             capacity,
             refill_per_sec,
             trust_proxy,
+            backend: Backend::Memory,
             buckets: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// 設定されたバックエンドで判定する。PG 障害時はメモリへ退避する
+    /// （認証を全停止させない。共有カウントの厳密性より可用性を取る）。
+    pub async fn check_with(&self, app: &app::App, key: &str) -> Result<(), u64> {
+        if self.backend == Backend::Pg {
+            match app
+                .check_auth_rate(key, self.capacity.ceil() as i64, 60)
+                .await
+            {
+                Ok(Some(retry)) => return Err(retry),
+                Ok(None) => return Ok(()),
+                Err(error) => {
+                    tracing::warn!(%error, "shared rate limiter unavailable; memory fallback");
+                }
+            }
+        }
+        self.check(key)
     }
 
     pub fn trust_proxy(&self) -> bool {
@@ -158,7 +190,7 @@ pub async fn limit_auth(State(state): State<ApiState>, req: Request, next: Next)
         .map(|connect| connect.0);
     let key = client_ip(req.headers(), peer, state.rate_limiter.trust_proxy());
 
-    if let Err(seconds) = state.rate_limiter.check(&key) {
+    if let Err(seconds) = state.rate_limiter.check_with(&state.app, &key).await {
         let trace = req
             .extensions()
             .get::<TraceId>()

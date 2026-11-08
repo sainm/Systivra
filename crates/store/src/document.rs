@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use sqlx::Row;
 use uuid::Uuid;
 
+use crate::knowledge::NodeDraft;
 use crate::pool::{Store, StoreError, Tx};
 
 #[derive(Debug, Clone)]
@@ -153,6 +154,129 @@ impl Store {
             .execute(&mut **tx)
             .await?;
         Ok(())
+    }
+
+    pub async fn list_revisions(
+        &self,
+        tx: &mut Tx<'_>,
+        document_id: Uuid,
+    ) -> Result<Vec<RevisionRow>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT r.id, r.document_id, r.source_revision, r.content_hash, r.object_key,
+                    r.file_size, r.mime_type, r.status, r.parser, r.parser_version,
+                    r.acquired_at, r.parsed_at,
+                    COALESCE((SELECT (pr.stats->>'page_count')::bigint
+                                FROM corpus.parse_run pr
+                               WHERE pr.revision_id = r.id
+                               ORDER BY pr.started_at DESC NULLS LAST LIMIT 1), 0) AS page_count,
+                    (SELECT count(*) FROM corpus.chunk c
+                      WHERE c.revision_id = r.id AND c.is_current) AS chunk_count,
+                    COALESCE((SELECT pr.status FROM corpus.parse_run pr
+                               WHERE pr.revision_id = r.id
+                               ORDER BY pr.started_at DESC NULLS LAST LIMIT 1), 'NOT_PARSED') AS parse_status
+               FROM corpus.document_revision r
+              WHERE r.document_id = $1
+              ORDER BY r.acquired_at DESC",
+        )
+        .bind(document_id)
+        .fetch_all(&mut **tx)
+        .await?;
+        Ok(rows.iter().map(revision_row).collect())
+    }
+
+    pub async fn demote_current_revision(
+        &self,
+        tx: &mut Tx<'_>,
+        document_id: Uuid,
+    ) -> Result<(), StoreError> {
+        sqlx::query(
+            "UPDATE corpus.document_revision
+                SET status = 'SUPERSEDED'
+              WHERE document_id = $1 AND status = 'CURRENT'",
+        )
+        .bind(document_id)
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn activate_revision(
+        &self,
+        tx: &mut Tx<'_>,
+        document_id: Uuid,
+        revision_id: Uuid,
+    ) -> Result<(), StoreError> {
+        sqlx::query(
+            "UPDATE corpus.document_revision
+                SET status = 'SUPERSEDED'
+              WHERE document_id = $1",
+        )
+        .bind(document_id)
+        .execute(&mut **tx)
+        .await?;
+        sqlx::query(
+            "UPDATE corpus.document_revision
+                SET status = 'CURRENT'
+              WHERE document_id = $1 AND id = $2",
+        )
+        .bind(document_id)
+        .bind(revision_id)
+        .execute(&mut **tx)
+        .await?;
+        sqlx::query(
+            "UPDATE corpus.chunk
+                SET is_current = (revision_id = $2),
+                    superseded_at = CASE WHEN revision_id = $2 THEN NULL ELSE now() END
+              WHERE document_id = $1",
+        )
+        .bind(document_id)
+        .bind(revision_id)
+        .execute(&mut **tx)
+        .await?;
+        self.set_current_revision(tx, document_id, revision_id)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn current_revision_of(
+        &self,
+        tx: &mut Tx<'_>,
+        document_id: Uuid,
+    ) -> Result<Option<Uuid>, StoreError> {
+        let row = sqlx::query("SELECT current_revision_id FROM corpus.document WHERE id = $1")
+            .bind(document_id)
+            .fetch_optional(&mut **tx)
+            .await?;
+        Ok(row.and_then(|row| row.get("current_revision_id")))
+    }
+
+    pub async fn document_node_drafts(
+        &self,
+        tx: &mut Tx<'_>,
+        revision_id: Uuid,
+    ) -> Result<Vec<NodeDraft>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT id, revision_id, parent_id, node_type, locator, ordinal, text, meta
+               FROM corpus.doc_node
+              WHERE revision_id = $1
+              ORDER BY ordinal, id",
+        )
+        .bind(revision_id)
+        .fetch_all(&mut **tx)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|row| NodeDraft {
+                id: row.get("id"),
+                revision_id: row.get("revision_id"),
+                parent_id: row.get("parent_id"),
+                node_type: row.get("node_type"),
+                locator: row.get("locator"),
+                ordinal: row.get("ordinal"),
+                text: row.get("text"),
+                meta: row.get("meta"),
+            })
+            .collect())
     }
 
     pub async fn find_document(

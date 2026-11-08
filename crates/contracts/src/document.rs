@@ -105,6 +105,17 @@ pub struct NextLinks {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct RevisionListResponse {
+    pub items: Vec<RevisionSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct RegisterRevisionResponse {
+    pub revision: RevisionSummary,
+    pub next: NextLinks,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RegisterDocumentResponse {
     pub document: DocumentDetail,
     pub next: NextLinks,

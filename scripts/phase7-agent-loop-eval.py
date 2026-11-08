@@ -179,6 +179,13 @@ def main() -> int:
             stderr=subprocess.DEVNULL,
         )
         wait_http(f"{API_BASE}/healthz")
+        # **ポート衝突を検出する。** 前回の API が残っていると、新プロセスは
+        # bind に失敗して即死するのに wait_http は旧プロセスに当たって成功し、
+        # 「古い DB のデータ」を読んで意味不明な失敗になる。
+        assert api.poll() is None, (
+            f"API プロセスが起動に失敗しました（ポート {API_PORT} が使用中？）。"
+            "古い systivra-api を終了してから再実行すること"
+        )
 
         worker_env = dict(os.environ, **ai_env)
         worker_env.update(
@@ -222,7 +229,7 @@ def main() -> int:
                 },
             },
         )
-        assert agent["current_version"] == 1
+        assert agent["current_version"] == 1, agent
 
         accepted = client.must(
             "POST",

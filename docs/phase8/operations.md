@@ -19,11 +19,28 @@ PGHOST=<host> PGUSER=<admin> PGDATABASE=systivra ./scripts/backup.sh
 
 Neo4j は PG からの導出物なので含めない。復旧時に `graph/rebuild` で作り直す。
 
-**RPO**: スナップショット時点。`BACKUP_ENCRYPTION_KEY` で AES-256-CBC 暗号化、
-`BACKUP_RETENTION_DAYS` で保持、`BACKUP_UPLOAD_CMD` でオフサイトへ渡せる。
-定期実行は `deployment/systemd/` / `deployment/launchd/` のテンプレートを使う。
-WAL 常時転送は `scripts/pitr-drill.sh` の構成を本番 PG に適用する（マネージド PG では
-設定権限を確認する）。
+**RPO**（2 つある。混ぜない）:
+
+| 対象 | RPO | 手段 |
+|---|---|---|
+| 論理バックアップ | **実行間隔**（毎日なら最大 24 時間） | この `backup.sh` |
+| 物理 / PITR | **最大 5 分** | Azure PG の自動バックアップ（WAL アーカイブ） |
+
+`BACKUP_ENCRYPTION_KEY` で AES-256-CBC 暗号化、`BACKUP_RETENTION_DAYS` で保持、
+`BACKUP_UPLOAD_CMD` でオフサイトへ渡せる。定期実行は `deployment/systemd/` /
+`deployment/launchd/` のテンプレートを使う。
+
+**Azure Database for PostgreSQL を使う場合**（[`deployment/azure/README.md`](../../deployment/azure/README.md)）:
+
+- WAL 常時転送（`archive_mode` / `archive_command`）は **Azure では設定できない**。
+  物理バックアップと PITR はプラットフォームの自動バックアップに任せる
+  （保持 7〜35 日、`az postgres flexible-server restore` で**新サーバー**に復元）。
+- Azure のバックアップ ファイルは**書き出せない**。オフサイト / 論理エクスポートは
+  上の `backup.sh` が唯一の手段。`BACKUP_UPLOAD_CMD` の宛先に Azure Blob を指定する。
+- `azure.extensions` に `vector,pg_trgm` を入れてからマイグレーションを流す。
+- `sslmode=require` を `DATABASE_URL` に明示する。組み込み接続プールの
+  トランザクション プーリングは**有効にしない**（`SET LOCAL app.project_id` が
+  セッションをまたいで漏れ、RLS が無意味になる）。
 
 ## 2. 復旧訓練
 
@@ -165,8 +182,20 @@ HMAC 署名）を `deployment/systemd/systivra-audit-forward.timer` などで定
 
 専用の一時クラスタで `archive_mode` + WAL アーカイブを作り、ベースバックアップ後の
 変更を「指定時刻より前」と「最新 LSN」の両方へ復元する。システムの PostgreSQL には
-触れない。本番では同じ設定（`wal_level=replica`、`archive_mode=on`、
-`archive_command`、`restore_command`）を適用し、復旧手順を訓練する。
+触れない。**復旧手順そのものの訓練**として価値がある（RTO の実測を含む）。
+
+自前クラスタと同じ設定（`wal_level=replica`、`archive_mode=on`、`archive_command`、
+`restore_command`）を本番 PG に適用できるのは**自宅 / コンテナの PostgreSQL だけ**。
+マネージド PG では設定権限が無い:
+
+| 環境 | 物理バックアップ / PITR |
+|---|---|
+| 自前 PostgreSQL | `pitr-drill.sh` の構成をそのまま適用 |
+| Azure Database for PostgreSQL | プラットフォームの自動バックアップ + `az postgres flexible-server restore`（Fast Restore / Geo Restore） |
+| Amazon RDS | 自動バックアップ + `aws rds restore-db-instance-to-point-in-time` |
+
+Azure / RDS では、**プラットフォーム側の PITR を使う復旧手順**を別途訓練する
+（復元先は新サーバーになる点が自前クラスタと違う）。
 
 ## 8. インシデント時の最小手順
 
@@ -258,8 +287,9 @@ worker を 2 台起動する:
 ## 10. 既知の制約
 
 - マルチノード / HA は未実装。レート制限・セッション失効は単一 API 前提。
-- PITR は訓練スクリプトで実測済み。本番の WAL 常時転送・オフサイト保管・KMS 鍵管理は
-  環境側の設定が必要。
+- PITR は訓練スクリプトで実測済み。自前 PG では同じ設定を本番に適用できるが、
+  マネージド PG（Azure / RDS）では設定権限が無く、プラットフォームの PITR を使う
+  （[`deployment/azure/README.md`](../../deployment/azure/README.md) §4）。
 - Neo4j Community はオンラインバックアップを持たない。復旧は PG からの再構築。
   clean-room はプロジェクト投影単位で検証済み（DB 全体ではない）。
 - SAML、フロントチャネル logout、SCIM の Bulk / 全属性 PATCH は未実装。

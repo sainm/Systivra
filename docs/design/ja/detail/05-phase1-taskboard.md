@@ -174,7 +174,7 @@ P1-ENV-01 Cargo workspace / compose / CI
 
 **実装済み（2026-11-05）**：`migrations/001_core.sql` / `002_core_ops.sql` / `deployment/postgres/roles.sql`。`scripts/verify-db.sh` が上表の項目を機械で確認する（9 アサーション、失敗時は非ゼロ終了）。
 
-> **DB ロールは 3 つ**。`SELECT … FOR UPDATE SKIP LOCKED` が UPDATE 権限を要求するため、API と worker を同じロールにできない（`detail/02` §0.1）。`systivra_scheduler` だけが `BYPASSRLS` を持つ。
+> **DB ロールは 3 つ**。`SELECT … FOR UPDATE SKIP LOCKED` が UPDATE 権限を要求するため、API と worker を同じロールにできない（`detail/02` §0.1）。`systivra_scheduler` は `BYPASSRLS` を持たず、`scheduler_scope` 方針（`core.job` / `core.project` / `ai.approval_request` / `test.test_execution` の許可リスト）で横断閲覧する（`detail/02` §0.1）。
 
 ### 5.2 `P1-API-01` 認証・認可・エラー
 

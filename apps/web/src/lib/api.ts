@@ -15,6 +15,7 @@ import type {
   CreateCodeRepositoryRequest,
   DocumentChunkListResponse,
   DocumentDetail,
+  RevisionListResponse,
   DocumentListResponse,
   EvidenceResponse,
   GraphEntitySearchResponse,
@@ -262,6 +263,25 @@ export function getEvidence(evidenceId: string): Promise<EvidenceResponse> {
 
 export function documentContentUrl(documentId: string): string {
   return `/api/v1/documents/${documentId}/content`;
+}
+
+export function documentRevisionContentUrl(documentId: string, revisionId: string): string {
+  return `/api/v1/documents/${documentId}/revisions/${revisionId}/content`;
+}
+
+export function listDocumentRevisions(documentId: string): Promise<RevisionListResponse> {
+  return request<RevisionListResponse>(`/documents/${documentId}/revisions`);
+}
+
+export function activateDocumentRevision(
+  projectId: string,
+  documentId: string,
+  revisionId: string,
+): Promise<RevisionListResponse> {
+  return request<RevisionListResponse>(
+    `/projects/${projectId}/documents/${documentId}/revisions/${revisionId}:activate`,
+    { method: "POST" },
+  );
 }
 
 export function jobEventsUrl(jobId: string): string {

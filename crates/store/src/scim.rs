@@ -230,22 +230,51 @@ impl Store {
         project: ProjectId,
         user: UserId,
         role: Role,
+        source: &str,
     ) -> Result<(), StoreError> {
         sqlx::query("SELECT set_config('app.project_id', $1, true)")
             .bind(project.0.to_string())
             .execute(&mut **tx)
             .await?;
         sqlx::query(
-            "INSERT INTO core.project_member (project_id, user_id, role)
-             VALUES ($1, $2, $3)
-             ON CONFLICT (project_id, user_id) DO UPDATE SET role = EXCLUDED.role",
+            "INSERT INTO core.project_member (project_id, user_id, role, role_source)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (project_id, user_id)
+             DO UPDATE SET role = EXCLUDED.role,
+                           role_source = EXCLUDED.role_source",
         )
         .bind(project.0)
         .bind(user.0)
         .bind(role.as_str())
+        .bind(source)
         .execute(&mut **tx)
         .await?;
         Ok(())
+    }
+
+    pub async fn scim_sourced_members(
+        &self,
+        tx: &mut Tx<'_>,
+        project: ProjectId,
+    ) -> Result<Vec<(UserId, Role)>, StoreError> {
+        sqlx::query("SELECT set_config('app.project_id', $1, true)")
+            .bind(project.0.to_string())
+            .execute(&mut **tx)
+            .await?;
+        let rows = sqlx::query(
+            "SELECT user_id, role FROM core.project_member
+              WHERE project_id = $1 AND role_source = 'SCIM'",
+        )
+        .bind(project.0)
+        .fetch_all(&mut **tx)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                let role = Role::parse(row.get::<String, _>("role").as_str())?;
+                Some((UserId(row.get("user_id")), role))
+            })
+            .collect())
     }
 
     pub async fn list_members(

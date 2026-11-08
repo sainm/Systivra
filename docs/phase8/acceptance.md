@@ -35,10 +35,10 @@
 | セッション DDL | `019_session.sql` の `core.session`、`021_session_identity.sql` の provider / subject / idp_sid |
 | セッション管理 | 自分のセッション一覧、個別失効、他端末の全失効、アイドルタイムアウト（`SESSION_IDLE_MINUTES`）、期限切れ削除（worker） |
 | IdP 主導ログアウト | `POST /auth/oidc/backchannel-logout`。logout token の署名・iss・aud・exp・events・jti リプレイを検証し、sub / sid で失効 |
-| SCIM | `022_scim.sql` / `023_first_project.sql`。Users / Groups の作成・一覧・PATCH（active）・削除、`SCIM_BEARER_TOKEN`、グループ→ロール同期 |
+| SCIM | `022_scim.sql` / `023_first_project.sql` / `029_enterprise_ops.sql`。Users / Groups の作成・一覧・PATCH（active）・削除、Groups PATCH（displayName / members / role）、ETag（`meta.version`）+ If-Match / If-None-Match、Bulk（最大 50 操作、`failOnErrors`）、`SCIM_BEARER_TOKEN`、グループ→ロール同期、グループ解除時の SCIM 由来ロール降格（`role_source`） |
 | ユーザー管理 | `/projects/{pid}/members` の一覧・ロール変更、`/users` 画面、OIDC の groups claim 同期 |
 | セッション | Cookie は `session_id:user_id:exp` の HMAC 署名。毎リクエスト DB で失効・期限を判定。`logout` は現在のセッションを失効させる。OIDC フローは別 Cookie に state/nonce/verifier/return_to を保持 |
-| レート制限 | `/auth/login`、`/auth/oidc/start`、`/auth/oidc/callback` を IP 単位のトークンバケットで制限。既定 容量 10 / 毎分 10 補充。超過は `429 AUTH_RATE_LIMITED` + `Retry-After` |
+| レート制限 | `/auth/login`、`/auth/oidc/start`、`/auth/oidc/callback` を IP 単位のトークンバケットで制限。既定 容量 10 / 毎分 10 補充。超過は `429 AUTH_RATE_LIMITED` + `Retry-After`。`AUTH_RATE_LIMIT_BACKEND=pg` で `core.rate_limit_bucket` の共有固定窓になり、複数 API で合算する（PG 障害時はメモリへ退避） |
 | セキュリティヘッダ | `nosniff` / `Referrer-Policy: no-referrer` / `X-Frame-Options: DENY` / `Permissions-Policy`。HSTS は https 設定時のみ |
 | パスワード監査 | `auth.password.login` の SUCCESS / FAILED。login_id は SHA-256、理由を `detail.reason` に残す |
 | SSO 監査 | `auth.sso.login` の SUCCESS / FAILED。subject は SHA-256、失敗理由を残す |
@@ -79,8 +79,34 @@
 | 22 | 監査を SIEM へ転送できる | **PASS** | NDJSON 326 行、HMAC 検証、再実行 0 行（カーソル 326） |
 | 23 | 暗号化・保持・オフサイト・定期実行 | **PASS（フックまで）** | AES-256-CBC の復号復元、30 日保持、`BACKUP_UPLOAD_CMD`、systemd/launchd テンプレート |
 | 24 | worker 停止後にジョブが回収される | **PASS** | 心拍切れ + 試行残り → 再クレーム（`attempt` 1→2）、試行を使い切った job → `FAILED` / `WORKER_HEARTBEAT_LOST` で停止、心拍が新しい job は奪わない |
+| 25 | 共有レート制限が複数 API で合算される | **PASS** | `AUTH_RATE_LIMIT_BACKEND=pg` の API 2 本（容量 6）に 3 + 3 回失敗 → 7 回目は両方 429 + `Retry-After` |
+| 26 | フロントチャネルログアウトでセッションが消える | **PASS** | `iss` 不一致 400、`iss` + `sid` 一致で 200 → `/auth/me` 401、監査 `auth.sso.frontchannel_logout` |
+| 27 | SCIM の ETag / PATCH / Bulk / 降格 | **PASS** | ETag = `meta.version`、If-None-Match 304、If-Match 不一致 412、Groups PATCH remove → `VIEWER|SCIM`、Bulk 2 操作（201/200）と `failOnErrors=1` の打切り |
 
 ---
+
+### 2.1 NOBYPASSRLS 下のジョブ実行（2026-11-08）
+
+`systivra_scheduler` から `BYPASSRLS` を外し、横断閲覧は `scheduler_scope` 方針
+（`core.job` / `core.project` / `ai.approval_request` / `test.test_execution`）で行う。
+Azure Database for PostgreSQL では管理者が `BYPASSRLS` を付与できないため（`deployment/azure/README.md`）。
+再現は `scripts/scheduler-rls-eval.py`（12 チェック）。
+
+| 項目 | 実測 |
+|---|---|
+| ロール | `rolbypassrls=false`、`scheduler_scope` 4 表、app へは非適用（`verify-db.sh`） |
+| PDF_PARSE | `phase2-revision-eval.py` が v1/v2 の解析・グラフ投影・改版切替まで通過 |
+| CODE_SYNC / ANALYZE | DIR リポジトリ同期 → 解析 `files_analyzed=12`、Fact 20 件 |
+| TEST_RUN prepare | run が `READY`（worker がケース数を確定） |
+| AGENT_RUN / Q-01 | `phase7-agent-loop-eval.py` が完走（予算・能力拒否・heartbeat 含む） |
+| セッション掃除 | scheduler の `core.session` DELETE が成功（`GRANT` を追加） |
+| 漂流 / 保持 | worker 起動時の drift 検出と保持期限適用が動作（publish はプロジェクト別 tx に修正） |
+| Outbox 投影 | 806 イベントを publish、dead letter 0。`projection_state` はプロジェクトごとの scoped tx で更新 |
+
+> 実装上の修正: `projection_state` と outbox の publish を同一の未スコープ tx で書くと
+> RLS の `WITH CHECK` に弾かれる。publish は未スコープ、`projection_state` は
+> プロジェクト別のスコープ付き tx に分けた。`core.session` の掃除には
+> scheduler への `SELECT/UPDATE/DELETE` 付与が要る（`roles.sql`）。
 
 ## 3. 実測値
 
@@ -104,10 +130,10 @@ RPO は「バックアップ時点の一貫したスナップショット」ま�
 
 | 項目 | 値 |
 |---|---|
-| E2E | **39 / 39 checks** |
+| E2E | **50 / 50 checks** |
 | ログイン往復 | 10〜13 ms（start → IdP authorize → callback → session。最新 11 ms） |
 | logout / back-channel | 204 / 200、直後の同一 Cookie は 401。logout token のリプレイ・改竄は 400 |
-| レート制限 | 6 回目で 429、`Retry-After: 60`（容量 6 / 毎分 1 補充の試験設定） |
+| レート制限 | 6 回目で 429、`Retry-After: 60`（容量 6 / 毎分 1 補充の試験設定）。共有バックエンドは 2 API へ 3 + 3 回で 7 回目が両方 429 |
 | セッション管理 | 2 件 → logout-all で 1 件失効 → current 1 件、DELETE 204、アイドル 401 |
 | SCIM | Users 一覧 / 作成 / PATCH active、Groups 作成、Bearer 無し 401、group→ARCHITECT |
 | SIEM | 326 行転送、HMAC 検証、再実行 0 行（カーソル 326） |
@@ -146,12 +172,13 @@ RPO は「バックアップ時点の一貫したスナップショット」ま�
   本番の常時 WAL 転送、オフサイト保管、保持期間の運用は未設定。
 - バックアップの暗号化鍵は環境変数。鍵管理（KMS / 封筒暗号）は未実装。
   `BACKUP_UPLOAD_CMD` はフックであり、実際のクラウド転送は環境側で設定する。
-- OIDC の back-channel logout は実装。SAML、フロントチャネル logout、
-  IdP 主導のセッション一覧同期は未実装。
+- OIDC の back-channel logout とフロントチャネル logout（`iss` + `sid`）は実装。
+  SAML、IdP 主導のセッション一覧同期は未実装。
 - 未知の subject は自動プロビジョニングしない。紐付けは SQL で行う（`06-API.md` §2.0）。
-- SCIM は Users / Groups の最小実装。Bulk、全属性の PATCH、`PUT` の完全置換仕様、
-  ETag は未実装。グループ→ロールは最も強いロールを付与し、グループから外しても
-  自動で降格しない（誤って権限を失わないため。変更は管理画面 / SQL）。
+- SCIM は Users / Groups、ETag、Groups の displayName / members / role PATCH、Bulk まで実装。
+  `PUT` の完全置換仕様（readOnly 属性の保持など）と任意属性の PATCH は未対応。
+  グループ→ロールは最も強いロールを付与し、グループから外れた SCIM 由来メンバーは
+  `VIEWER` へ降格する（`OWNER` と手動付与は触らない）。
 - ID token の署名鍵ローテーションは discovery キャッシュの再取得で追随するが、
   明示的な定期更新は無い。交換失敗時にキャッシュを捨てる。
 - OIDC discovery は HTTPS を前提とする（`localhost` のみ http を許す）。
@@ -160,8 +187,10 @@ RPO は「バックアップ時点の一貫したスナップショット」ま�
   worker が期限切れ・失効済みを 7 日後に削除する。端末一覧 / 個別失効 / 全失効は
   `/auth/sessions` と `/security` で提供する。
 - 旧形式の Cookie（session id なし）は 401。アップグレード後は再ログインが必要。
-- レート制限は単一 API プロセスのメモリ保持。水平分割するとノードごとに別カウント。
-  `TRUST_PROXY=1` は前段が `X-Forwarded-For` を上書きする構成でのみ使う。
+- レート制限は既定で単一 API プロセスのメモリ保持。`AUTH_RATE_LIMIT_BACKEND=pg` で
+  `core.rate_limit_bucket` の共有固定窓（窓 60 秒）に切り替わり、複数 API で合算する。
+  PG 障害時はメモリへ退避する（厳密性より可用性）。`TRUST_PROXY=1` は前段が
+  `X-Forwarded-For` を上書きする構成でのみ使う。
 - パスワードログインの無効化（OIDC 専用強制）は未実装。SSO と併存する。
 - 監査の失敗記録は `project_id=NULL`（プロジェクト確定前）。既存の監査照会は
   `project_id` 単位のため、ログイン監査は DB / 運用ツールで参照する。
@@ -208,6 +237,11 @@ OIDC_CLIENT_SECRET=eval-secret
 OIDC_REDIRECT_URI=http://localhost:15173/api/v1/auth/oidc/callback
 OIDC_PROVIDER_LABEL="ローカル IdP"
 SCIM_BEARER_TOKEN=scim-eval-token
+
+# 共有レート制限の実測は、同じ DB を指す API を 2 本
+# （AUTH_RATE_LIMIT_BACKEND=pg、容量 6）同時に起動して 3 + 3 回ずつ失敗させる。
+# E2E は SSO 用 API を容量 100、レート制限の試験用 API を容量 6、
+# 共有の試験用 API を 18101 / 18102 で起動する。
 SESSION_IDLE_MINUTES=60
 ```
 
@@ -219,10 +253,10 @@ E2E は SSO 用 API を容量 100、レート制限の試験用 API を容量 6 
 
 Phase 8 の正式完了には、少なくとも次が必要。
 
-1. SAML、フロントチャネル logout、IdP 主導のセッション同期の顧客要件確定と実装。
-2. SCIM の Bulk / 全属性 PATCH / ETag、グループ解除時の降格ポリシー。
+1. SAML、IdP 主導のセッション一覧同期の顧客要件確定と実装。
+2. SCIM の `PUT` 完全置換と任意属性 PATCH。
 3. 本番 WAL 常時転送・オフサイト保管・KMS 鍵管理・保持期間の運用設定。
 4. Neo4j データベース全体の clean-room 復旧と、Neo4j 停止を跨ぐ手順。
-5. HA 配置（API 複数、worker 複数、PG レプリカ）と、共有ストアでのレート制限・
-   セッション失効・SIEM カーソル。
+5. HA 配置（API 複数、worker 複数、PG レプリカ）と、共有ストアでのセッション失効・
+   SIEM カーソル（レート制限の共有は実装済み）。
 6. 顧客環境での運用手順レビュー、SIEM 側の重複排除、監査保持期間。

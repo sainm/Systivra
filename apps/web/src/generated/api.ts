@@ -116,6 +116,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/oidc/frontchannel-logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["oidc_frontchannel_logout"];
+        put?: never;
+        post: operations["oidc_frontchannel_logout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/oidc/start": {
         parameters: {
             query?: never;
@@ -252,6 +268,38 @@ export interface paths {
             cookie?: never;
         };
         get: operations["content"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/documents/{did}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_document_revisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/documents/{did}/revisions/{rid}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["revision_content"];
         put?: never;
         post?: never;
         delete?: never;
@@ -772,6 +820,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{pid}/documents/{did}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["register_revision"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{pid}/documents/{did}/revisions/{rid_activate}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["activate_revision"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{pid}/documents:bulk-import": {
         parameters: {
             query?: never;
@@ -894,6 +974,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["rebuild"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{pid}/graph/rebuild/abort": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["rebuild_abort"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2015,6 +2111,24 @@ export interface components {
             field: string;
             message: string;
         };
+        FrontChannelLogoutForm: {
+            iss?: string | null;
+            sid?: string | null;
+        };
+        GraphBuildView: {
+            /** Format: uuid */
+            build_id: string;
+            /** Format: double */
+            drift_rate?: number | null;
+            /** Format: int64 */
+            entities_written: number;
+            /** Format: date-time */
+            finished_at?: string | null;
+            /** Format: int64 */
+            relationships_written: number;
+            shadow_label: string;
+            status: string;
+        };
         GraphEdge: {
             /** Format: float */
             confidence: number;
@@ -2056,15 +2170,36 @@ export interface components {
             nodes: components["schemas"]["GraphEntity"][];
             relations: string[];
         };
+        GraphRebuildAbortResponse: {
+            /** Format: uuid */
+            build_id?: string | null;
+            shadow_deleted: boolean;
+            status: string;
+        };
         GraphRebuildResponse: {
+            /** Format: uuid */
+            build_id: string;
+            /** Format: double */
+            drift_rate: number;
             /** Format: int64 */
             entities: number;
             /** Format: int64 */
+            previous_entities: number;
+            /** Format: int64 */
+            previous_relationships: number;
+            /** Format: int64 */
             relationships: number;
+            status: string;
         };
         GraphStatsResponse: {
+            drift_degraded: boolean;
             /** Format: double */
             drift_rate: number;
+            last_build?: null | components["schemas"]["GraphBuildView"];
+            /** Format: date-time */
+            last_drift_checked_at?: string | null;
+            /** Format: double */
+            last_drift_rate?: number | null;
             /** Format: int64 */
             last_event_seq: number;
             /** Format: int64 */
@@ -2072,6 +2207,8 @@ export interface components {
             /** Format: int64 */
             neo4j_relationships: number;
             ontology_version: string;
+            /** Format: int64 */
+            pending_events: number;
             /** Format: int64 */
             pg_nodes: number;
             /** Format: int64 */
@@ -2703,6 +2840,10 @@ export interface components {
             /** @description stdio / http */
             transport?: string;
         };
+        RegisterRevisionResponse: {
+            next: components["schemas"]["NextLinks"];
+            revision: components["schemas"]["RevisionSummary"];
+        };
         /**
          * @description 既存 chunk の `tokenized` を作り直す保守操作の結果。
          *     `fts` は `tokenized` の生成列なので、更新すれば索引も追随する。
@@ -2720,6 +2861,9 @@ export interface components {
          * @description 文書の版。
          */
         RevisionId: string;
+        RevisionListResponse: {
+            items: components["schemas"]["RevisionSummary"][];
+        };
         RevisionSummary: {
             /** Format: date-time */
             acquired_at: string;
@@ -3275,6 +3419,67 @@ export interface operations {
             };
         };
     };
+    oidc_frontchannel_logout: {
+        parameters: {
+            query?: {
+                /** @description Issuer */
+                iss?: string;
+                /** @description IdP session ID */
+                sid?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description sid 一致セッションを失効 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    oidc_frontchannel_logout_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FrontChannelLogoutForm"];
+            };
+        };
+        responses: {
+            /** @description sid 一致セッションを失効 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     oidc_start: {
         parameters: {
             query?: {
@@ -3548,6 +3753,67 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description PDF bytes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_document_revisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Document ID */
+                did: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionListResponse"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    revision_content: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Document ID */
+                did: string;
+                /** @description Revision ID */
+                rid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revision content */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4672,6 +4938,108 @@ export interface operations {
             };
         };
     };
+    register_revision: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project ID */
+                pid: string;
+                /** @description Document ID */
+                did: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterDocumentRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegisterRevisionResponse"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    activate_revision: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project ID */
+                pid: string;
+                /** @description Document ID */
+                did: string;
+                /** @description Revision ID + ':activate' */
+                rid_activate: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionListResponse"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     bulk_import: {
         parameters: {
             query?: never;
@@ -4933,6 +5301,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GraphRebuildResponse"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    rebuild_abort: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project ID */
+                pid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GraphRebuildAbortResponse"];
                 };
             };
             403: {

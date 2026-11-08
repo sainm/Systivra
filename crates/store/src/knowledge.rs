@@ -750,7 +750,10 @@ impl Store {
             WHERE c.project_id = ",
         );
         q.push_bind(project_id);
-        q.push(" AND c.is_current AND c.fts @@ to_tsquery('simple', ");
+        if filter.revision_id.is_none() {
+            q.push(" AND c.is_current");
+        }
+        q.push(" AND c.fts @@ to_tsquery('simple', ");
         q.push_bind(tsquery);
         q.push(")");
         push_filter(&mut q, filter);
@@ -799,7 +802,9 @@ impl Store {
             q.push_bind(project_id);
             q.push(" AND e.model_id = ");
             q.push_bind(model_id);
-            q.push(" AND c.is_current");
+            if filter.revision_id.is_none() {
+                q.push(" AND c.is_current");
+            }
             push_filter(&mut q, filter);
             q.push(" ORDER BY e.vec <=> ");
             q.push_bind(&vector);

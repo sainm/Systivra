@@ -22,7 +22,11 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'systivra_scheduler') THEN
     -- 全プロジェクト横断でジョブを取り出すためだけのロール。
-    CREATE ROLE systivra_scheduler LOGIN BYPASSRLS;
+    -- **BYPASSRLS は付けない。** Azure Database for PostgreSQL では PG16 未満、
+    -- admin（azure_pg_admin）が非管理者に BYPASSRLS を付与できない。RDS /
+    -- Cloud SQL も制約が違う。横断閲覧は下の `scheduler_scope` ポリシーで
+    -- 表現するので、属性に頼ると移植できなくなる。
+    CREATE ROLE systivra_scheduler LOGIN;
   END IF;
 END
 $$;
@@ -97,6 +101,15 @@ BEGIN
     GRANT SELECT, INSERT, UPDATE ON core.job_checkpoint,
           core.outbox_event, core.outbox_dead_letter TO systivra_worker, systivra_scheduler;
     GRANT SELECT, INSERT ON core.outbox_event TO systivra_app;
+  END IF;
+END
+$$;
+
+-- 期限切れセッションの掃除はプロジェクト横断（core.session は RLS 対象外）。
+DO $$
+BEGIN
+  IF to_regclass('core.session') IS NOT NULL THEN
+    GRANT SELECT, UPDATE, DELETE ON core.session TO systivra_scheduler;
   END IF;
 END
 $$;
@@ -177,5 +190,44 @@ BEGIN
   IF to_regclass('core.project_member') IS NOT NULL THEN
     GRANT SELECT ON core.project_member TO systivra_worker, systivra_scheduler;
   END IF;
+  IF to_regclass('core.project') IS NOT NULL THEN
+    GRANT SELECT ON core.project TO systivra_scheduler;
+  END IF;
+  -- 既に BYPASSRLS で作られた環境（旧 roles.sql）もここで正規化する。
+  -- 属性は CREATE 時にしか扱わないと、作り直し不可なので残り続ける。
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'systivra_scheduler' AND rolbypassrls) THEN
+    ALTER ROLE systivra_scheduler NOBYPASSRLS;
+  END IF;
+END
+$$;
+
+-- ─────────────────────────────────────────────────────────────
+-- 4. scheduler の横断閲覧を RLS の方針として書く
+-- ─────────────────────────────────────────────────────────────
+--
+-- BYPASSRLS の代替。**許可リスト**で「このロールだけ全行を見られる」表を並べる。
+-- 追加のたびにここへ書く（権限の一覧が 1 か所に纏まるように）。
+--
+-- 対象:
+--   core.job              claim / requeue / heartbeat（project_id 無しで取り出す）
+--   core.project          drift 監視のプロジェクト一覧
+--   ai.approval_request   期限切れ承認の一括 close
+--   test.test_execution   artifact の保持期限掃き（project_id 無し）
+--
+-- 方針は権限を**付けない**。RLS はフィルタしかできず、GRANT は上の 2 / 3 が管轄。
+-- つまり `FOR ALL USING (true)` を書いても、元々の GRANT 以上は触れない。
+DO $$
+DECLARE
+  target text;
+BEGIN
+  FOREACH target IN ARRAY ARRAY[
+    'core.job', 'core.project', 'ai.approval_request', 'test.test_execution'
+  ] LOOP
+    CONTINUE WHEN to_regclass(target) IS NULL;
+    EXECUTE format('DROP POLICY IF EXISTS scheduler_scope ON %s', target);
+    EXECUTE format(
+      'CREATE POLICY scheduler_scope ON %s '
+      'FOR ALL TO systivra_scheduler USING (true) WITH CHECK (true)', target);
+  END LOOP;
 END
 $$;
