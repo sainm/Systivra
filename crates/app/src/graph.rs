@@ -337,6 +337,22 @@ impl App {
         })
     }
 
+    /// 編集中の DRAFT を破棄する。公開版は変わらない。
+    pub async fn discard_ontology_draft(
+        &self,
+        auth: &Authenticated,
+        project: ProjectId,
+    ) -> Result<(), AppError> {
+        self.require_ontology_write(auth, project).await?;
+        let mut tx = self.store().begin_scoped(project).await?;
+        let removed = self.store().discard_ontology_draft(&mut tx).await?;
+        store::commit(tx).await?;
+        if !removed {
+            return Err(AppError::NotFound(ErrorCode::NotFound));
+        }
+        Ok(())
+    }
+
     /// DRAFT に型を追加 / 更新する。
     pub async fn upsert_ontology_entity_type(
         &self,

@@ -22,7 +22,8 @@
     "check:ui:phase8": "node scripts/ui-check-phase8.mjs",
     "check:ui:cancel": "node scripts/ui-check-cancel.mjs",
     "check:ui:phase5-inquiry": "node scripts/ui-check-phase5-inquiry.mjs",
-    "check:ui:workflow": "node scripts/ui-check-workflow-editor.mjs"
+    "check:ui:workflow": "node scripts/ui-check-workflow-editor.mjs",
+    "check:ui:ontology": "node scripts/ui-check-ontology.mjs"
   },
   "dependencies": {
     "i18next": "26.7.2",

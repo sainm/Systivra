@@ -1009,7 +1009,8 @@ export interface paths {
         get: operations["ontology_draft"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** 編集中の DRAFT を破棄する（公開版は変わらない）。 */
+        delete: operations["discard_ontology_draft"];
         options?: never;
         head?: never;
         patch?: never;
@@ -5666,6 +5667,35 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["OntologyResponse"];
                 };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    discard_ontology_draft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project ID */
+                pid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Discarded */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             404: {
                 headers: {

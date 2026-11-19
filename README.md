@@ -185,6 +185,7 @@ python3 scripts/phase8-sso-eval.py                         # SSO / back-channel 
 scripts/scheduler-rls-eval.py scheduler の NOBYPASSRLS 下でのジョブ・保守処理の受入                              # 監査 NDJSON の SIEM 転送とカーソル
 cd apps/web && npm run check:ui:phase8                     # ログイン / セキュリティ / ユーザー（要 API + Vite）
 cd apps/web && npm run check:ui:cancel                     # 解析 / Agent run の取消ボタン（job-cancel-eval が起動）
+cd apps/web && npm run check:ui:ontology                   # Ontology 編集（DRAFT / 型 / 関係型 / マトリクス / 破棄）
 ```
 
 ### ローカル起動

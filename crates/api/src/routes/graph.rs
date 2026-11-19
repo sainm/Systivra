@@ -28,7 +28,7 @@ pub fn router() -> Router<ApiState> {
         )
         .route(
             "/api/v1/projects/{pid}/graph/ontology/draft",
-            get(ontology_draft),
+            get(ontology_draft).delete(discard_ontology_draft),
         )
         .route(
             "/api/v1/projects/{pid}/graph/ontology/versions",
@@ -144,6 +144,30 @@ pub(crate) async fn ontology_draft(
         .await
         .map_err(|error| ApiError::from_app(error, &trace))?;
     Ok(Json(response))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/projects/{pid}/graph/ontology/draft",
+    params(("pid" = uuid::Uuid, Path, description = "Project ID")),
+    responses(
+        (status = 204, description = "Discarded"),
+        (status = 404, body = contracts::Problem)
+    )
+)]
+/// 編集中の DRAFT を破棄する（公開版は変わらない）。
+pub(crate) async fn discard_ontology_draft(
+    State(state): State<ApiState>,
+    scope: ProjectScope,
+    Extension(trace): Extension<TraceId>,
+    Extension(auth): Extension<Authenticated>,
+) -> Result<StatusCode, ApiError> {
+    state
+        .app
+        .discard_ontology_draft(&auth, scope.project)
+        .await
+        .map_err(|error| ApiError::from_app(error, &trace))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[utoipa::path(

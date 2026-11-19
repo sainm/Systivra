@@ -3264,6 +3264,40 @@
             }
           }
         }
+      },
+      "delete": {
+        "tags": [
+          "crate::routes::graph"
+        ],
+        "summary": "編集中の DRAFT を破棄する（公開版は変わらない）。",
+        "operationId": "discard_ontology_draft",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Discarded"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/projects/{pid}/graph/ontology/drafts": {

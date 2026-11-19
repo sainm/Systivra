@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-11-19 — Ontology 画面の受入をスクリプト化
+
+### Added
+
+- `DELETE /graph/ontology/draft`: 編集中の版を破棄する（型・関係型ごと削除、公開版は不変）。
+  途中まで作った型が次の DRAFT に混ざらないようにするため。
+- `apps/web/scripts/ui-check-ontology.mjs`（`npm run check:ui:ontology`）。
+  DRAFT 作成 → 実体型の追加・編集・削除 → 関係型の追加 → マトリクスの絞り込みと
+  セル押下 → 破棄までを 1 本で検証し、**失敗しても DRAFT を残さない**。
+
+### Verification
+
+- 2 回連続で成功（2 回目は前回の後始末が効いていることの確認になる）:
+  `{publishedRows: 56, filteredHeads: ["Screen"], afterRows: 56, errors: 0}`。
+- 実行後の DB: `DRAFT 0 / PUBLISHED 1`。
+
+### 直したこと（テスト側のバグ 2 件）
+
+- クリック直後に `fill` すると、行の値がフォームへ反映される前の入力が上書きされる。
+  「編集中は名前が disabled」を確定信号として待つようにした。
+- 更新後に `waitFor` で行の存在だけを見ると、再描画前の DOM を読む。
+  **新しい表示名が出るまで**待つようにした。どちらも実装ではなくテストの競合。
+
 ## 2026-11-19 — Ontology の関係マトリクス
 
 ### Added

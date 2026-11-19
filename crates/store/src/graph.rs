@@ -1356,6 +1356,29 @@ impl Store {
             .collect())
     }
 
+    /// 編集中の DRAFT を破棄する（型・関係型ごと消す）。
+    ///
+    /// 公開版には触らない。「編集をやめる」ための操作で、
+    /// 途中まで作った型を残すと次の DRAFT に混ざる。
+    pub async fn discard_ontology_draft(&self, tx: &mut Tx<'_>) -> Result<bool, StoreError> {
+        let Some((id, _label, _based_on)) = self.ontology_draft(tx).await? else {
+            return Ok(false);
+        };
+        sqlx::query("DELETE FROM graph_meta.entity_type WHERE ontology_version_id = $1")
+            .bind(id)
+            .execute(&mut **tx)
+            .await?;
+        sqlx::query("DELETE FROM graph_meta.relation_type WHERE ontology_version_id = $1")
+            .bind(id)
+            .execute(&mut **tx)
+            .await?;
+        sqlx::query("DELETE FROM graph_meta.ontology_version WHERE id = $1 AND status = 'DRAFT'")
+            .bind(id)
+            .execute(&mut **tx)
+            .await?;
+        Ok(true)
+    }
+
     /// 版が存在するか（`based_on` の妥当性確認に使う）。
     pub async fn ontology_version_exists(
         &self,

@@ -58,6 +58,7 @@ use utoipa::OpenApi;
         crate::routes::graph::create_ontology_draft,
         crate::routes::graph::ontology_draft,
         crate::routes::graph::ontology_versions,
+        crate::routes::graph::discard_ontology_draft,
         crate::routes::graph::upsert_entity_type,
         crate::routes::graph::delete_entity_type,
         crate::routes::graph::upsert_relation_type,
