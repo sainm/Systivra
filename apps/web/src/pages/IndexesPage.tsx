@@ -2,12 +2,15 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { AppShell } from "../components/AppShell";
 import { EmptyState, ErrorNotice } from "../components/ui";
-import { activateIndexBuild, createIndexBuild, listIndexBuilds } from "../lib/api";
+import {
+  activateIndexBuild,
+  createIndexBuild,
+  listEmbeddingModels,
+  listIndexBuilds,
+} from "../lib/api";
 import { formatDate, formatNumber } from "../lib/format";
-import type { IndexBuildSummary, Me, Membership } from "../lib/types";
+import type { EmbeddingModelOption, IndexBuildSummary, Me, Membership } from "../lib/types";
 import { useT } from "../i18n";
-
-const MODELS = ["local-hash-1024", "local-hash-1024-v2"];
 
 export function IndexesPage({
   me,
@@ -21,7 +24,8 @@ export function IndexesPage({
   const { t, lang } = useT();
   const { pid = "" } = useParams();
   const [builds, setBuilds] = useState<IndexBuildSummary[]>([]);
-  const [model, setModel] = useState(MODELS[MODELS.length - 1]);
+  const [models, setModels] = useState<EmbeddingModelOption[]>([]);
+  const [model, setModel] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -29,8 +33,13 @@ export function IndexesPage({
 
   const load = useCallback(async () => {
     try {
-      const response = await listIndexBuilds(pid);
+      const [response, modelList] = await Promise.all([
+        listIndexBuilds(pid),
+        listEmbeddingModels(pid),
+      ]);
       setBuilds(response.items);
+      setModels(modelList.items);
+      setModel((current) => current || modelList.items.at(-1)?.name || "");
       setError(null);
     } catch (cause) {
       setError(cause);
@@ -100,17 +109,24 @@ export function IndexesPage({
             value={model}
             onChange={(event) => setModel(event.target.value)}
           >
-            {MODELS.map((name) => (
-              <option key={name} value={name}>
-                {name}
+            {models.map((option) => (
+              <option key={`${option.name}@${option.revision}`} value={option.name}>
+                {option.name} (rev {option.revision}, {option.dim}d)
               </option>
             ))}
           </select>
-          <button className="btn btn-primary" onClick={() => void create()} disabled={busy}>
+          <button
+            className="btn btn-primary"
+            onClick={() => void create()}
+            disabled={busy || !model}
+          >
             {t("indexes.create")}
           </button>
         </div>
         {notice ? <span className="chip chip-accent">{notice}</span> : null}
+        {!loading && models.length === 0 ? (
+          <span className="chip chip-warn">{t("indexes.noModels")}</span>
+        ) : null}
       </div>
 
       {error ? <div className="page-error"><ErrorNotice error={error} onRetry={() => void load()} /></div> : null}

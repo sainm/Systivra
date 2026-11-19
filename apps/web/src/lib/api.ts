@@ -1,84 +1,86 @@
 import type {
+  AgentRunView,
+  AgentView,
+  AiOverviewResponse,
+  ApprovalView,
+  ApproveTestCaseResponse,
+  ArtifactCleanupResponse,
   AuthConfigResponse,
   CodeAnalysisAcceptedResponse,
-  MemberListResponse,
-  RevokeOtherSessionsResponse,
-  SessionListResponse,
   CodeAnalysisRunListResponse,
   CodeFactListResponse,
+  CodeFileTextResponse,
   CodeRepositoryListResponse,
   CodeRepositorySummary,
   CodeRevisionListResponse,
   CodeSourceFileListResponse,
   CodeSymbolListResponse,
-  CreateIndexBuildResponse,
+  CoverageView,
+  CreateAgentRunRequest,
   CreateCodeRepositoryRequest,
+  CreateImpactAssessmentRequest,
+  CreateIndexBuildResponse,
+  CreateInquiryRequest,
+  CreateTestRunRequest,
+  CreateTestRunResponse,
+  CreateWorkflowRequest,
+  DecideApprovalRequest,
+  DeriveInquiryPlanRequest,
+  DeriveTestPlanRequest,
+  DeriveTestPlanResponse,
   DocumentChunkListResponse,
   DocumentDetail,
-  RevisionListResponse,
   DocumentListResponse,
+  EmbeddingModelListResponse,
   EvidenceResponse,
+  ExpireArtifactsRequest,
+  ExtractRulesRequest,
+  ExtractRulesResponse,
   GraphEntitySearchResponse,
   GraphNeighborsResponse,
   GraphPathResponse,
   GraphRebuildResponse,
   GraphStatsResponse,
   GraphSubgraphResponse,
-  IndexBuildListResponse,
-  IndexBuildSummary,
-  CreateImpactAssessmentRequest,
   ImpactAssessmentAcceptedResponse,
   ImpactAssessmentListResponse,
   ImpactAssessmentResponse,
+  IndexBuildListResponse,
+  IndexBuildSummary,
+  InquiryAcceptedResponse,
+  InquiryResponse,
   JobResponse,
   LoginResponse,
+  McpServerView,
+  McpToolsResponse,
   Me,
+  MemberListResponse,
+  NarrateImpactResponse,
+  NarrateInquiryResponse,
+  OntologyEntityType,
   OntologyResponse,
   ParseAcceptedResponse,
   Problem,
   PublishOntologyResponse,
+  RecomputeCoverageRequest,
+  RegisterAgentRequest,
   RegisterDocumentRequest,
   RegisterDocumentResponse,
+  RegisterMcpServerRequest,
+  RevisionListResponse,
+  RevokeOtherSessionsResponse,
   SearchRequest,
   SearchResponse,
+  SessionListResponse,
+  SyncCodeRevisionRequest,
+  SyncCodeRevisionResponse,
+  TestOverviewResponse,
   TraceabilityResponse,
   TreeResponse,
   UploadUrlRequest,
   UploadUrlResponse,
-  SyncCodeRevisionRequest,
-  SyncCodeRevisionResponse,
-  ApproveTestCaseResponse,
-  ArtifactCleanupResponse,
-  CreateTestRunRequest,
-  CreateTestRunResponse,
-  DeriveTestPlanRequest,
-  DeriveTestPlanResponse,
-  ExpireArtifactsRequest,
-  ExtractRulesRequest,
-  ExtractRulesResponse,
-  RecomputeCoverageRequest,
-  CoverageView,
-  TestOverviewResponse,
-  AiOverviewResponse,
-  AgentView,
-  AgentRunView,
-  McpServerView,
-  McpToolsResponse,
-  WorkflowView,
-  ApprovalView,
-  RegisterAgentRequest,
-  CreateAgentRunRequest,
-  CreateWorkflowRequest,
-  DecideApprovalRequest,
-  RegisterMcpServerRequest,
-  InquiryResponse,
-  InquiryAcceptedResponse,
-  CreateInquiryRequest,
-  DeriveInquiryPlanRequest,
   WorkflowDetailResponse,
-  NarrateInquiryResponse,
-  NarrateImpactResponse,
-} from "./types";
+  WorkflowView,} from "./types";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -250,6 +252,16 @@ export function getJob(jobId: string): Promise<JobResponse> {
   return request<JobResponse>(`/jobs/${jobId}`);
 }
 
+export function cancelJob(jobId: string): Promise<JobResponse> {
+  return request<JobResponse>(`/jobs/${jobId}:cancel`, { method: "POST" });
+}
+
+export function cancelAgentRun(projectId: string, runId: string): Promise<AgentRunView> {
+  return request<AgentRunView>(`/projects/${projectId}/agent-runs/${runId}:cancel`, {
+    method: "POST",
+  });
+}
+
 export function search(projectId: string, body: SearchRequest): Promise<SearchResponse> {
   return request<SearchResponse>(`/projects/${projectId}/knowledge/search`, {
     method: "POST",
@@ -315,6 +327,10 @@ export function listIndexBuilds(projectId: string): Promise<IndexBuildListRespon
   return request<IndexBuildListResponse>(`/projects/${projectId}/index-builds`);
 }
 
+export function listEmbeddingModels(projectId: string): Promise<EmbeddingModelListResponse> {
+  return request<EmbeddingModelListResponse>(`/projects/${projectId}/embedding-models`);
+}
+
 export function createIndexBuild(
   projectId: string,
   model: string,
@@ -341,11 +357,38 @@ export function getOntology(projectId: string): Promise<OntologyResponse> {
 export function publishOntology(
   projectId: string,
   version: string,
+  draft = false,
 ): Promise<PublishOntologyResponse> {
   return request<PublishOntologyResponse>(`/projects/${projectId}/graph/ontology/publish`, {
     method: "POST",
-    body: { version },
+    body: { version, draft },
   });
+}
+
+export function createOntologyDraft(projectId: string): Promise<OntologyResponse> {
+  return request<OntologyResponse>(`/projects/${projectId}/graph/ontology/drafts`, {
+    method: "POST",
+  });
+}
+
+export function upsertOntologyEntityType(
+  projectId: string,
+  entityType: OntologyEntityType,
+): Promise<OntologyResponse> {
+  return request<OntologyResponse>(
+    `/projects/${projectId}/graph/ontology/entity-types`,
+    { method: "PUT", body: entityType },
+  );
+}
+
+export function deleteOntologyEntityType(
+  projectId: string,
+  name: string,
+): Promise<OntologyResponse> {
+  return request<OntologyResponse>(
+    `/projects/${projectId}/graph/ontology/entity-types/${encodeURIComponent(name)}`,
+    { method: "DELETE" },
+  );
 }
 
 export function searchGraphEntities(
@@ -494,6 +537,10 @@ export function listCodeFiles(
   return request<CodeSourceFileListResponse>(
     `/projects/${projectId}/code/revisions/${revisionId}/files`,
   );
+}
+
+export function codeFileText(fileId: string): Promise<CodeFileTextResponse> {
+  return request<CodeFileTextResponse>(`/code/files/${fileId}/text`);
 }
 
 export function codeFileContentUrl(fileId: string): string {

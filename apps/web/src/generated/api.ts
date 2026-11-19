@@ -228,6 +228,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/code/files/{fid}/text": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** ソースを行単位で返す（UI の行ハイライト用）。 */
+        get: operations["source_text"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/documents/{did}": {
         parameters: {
             query?: never;
@@ -452,6 +469,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/jobs/{jid}:cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["cancel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{pid}/agent-runs": {
         parameters: {
             query?: never;
@@ -478,6 +511,22 @@ export interface paths {
         get: operations["agent_run"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{pid}/agent-runs/{rid}:cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["cancel_agent_run"];
         delete?: never;
         options?: never;
         head?: never;
@@ -878,6 +927,23 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["create_upload_url"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{pid}/embedding-models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 索引ビルドで選べる埋め込みモデル。UI の選択肢はここから作る。 */
+        get: operations["embedding_models"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1449,6 +1515,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{pid}/workflows/{wid}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 定義の書き出し。YAML は**片方向**（取り込みは JSON）。 */
+        get: operations["export_workflow"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{pid}/workflows/{wid}/runs": {
         parameters: {
             query?: never;
@@ -1580,11 +1663,6 @@ export interface components {
             id: string;
             payload: unknown;
             requested_by: string;
-            /**
-             * Format: uuid
-             * @description Agent の実行が起票した場合の run。いまは未使用（将来の承認フロー用）。
-             */
-            run_id?: string | null;
             status: string;
             /**
              * Format: uuid
@@ -1745,6 +1823,21 @@ export interface components {
             subject_key: string;
             subject_kind: string;
             unresolved_reason?: string | null;
+        };
+        /**
+         * @description ソースを行単位で返す。UI が該当行へスクロールして強調するために使う。
+         *
+         *     `line_starts` は**元ファイル基準のバイト位置**。文字列の index ではなく
+         *     バイト位置なので、UI 側は「行頭バイト配列」として扱うこと。
+         */
+        CodeFileTextResponse: {
+            encoding: string;
+            /** @description 元ファイルに完全一致で戻せるか（false ならバイト位置を信用しない）。 */
+            exact_offsets: boolean;
+            line_starts: number[];
+            lines: string[];
+            /** @description 行数上限で切ったか。 */
+            truncated: boolean;
         };
         CodeRepositoryListResponse: {
             items: components["schemas"]["CodeRepositorySummary"][];
@@ -1962,6 +2055,13 @@ export interface components {
              *     `test.case_generate` はこちらを使う（`test.plan_generate` は新規作成）。
              */
             plan_id?: string | null;
+            /**
+             * @description この計画で対象にする検証ルール。省略時はプロジェクト全体。
+             *
+             *     指定した場合は**その範囲だけ**から派生する。未知の ID は 400
+             *     （黙って無視すると「対象にしたつもり」の計画ができる）。
+             */
+            rule_ids?: string[] | null;
         };
         DeriveTestPlanResponse: {
             /** @description 既存計画への追記だったか（新規作成なら false）。 */
@@ -2049,6 +2149,16 @@ export interface components {
                 [key: string]: string;
             };
             value?: string | null;
+        };
+        EmbeddingModelListResponse: {
+            items: components["schemas"]["EmbeddingModelOption"][];
+        };
+        /** @description 索引ビルドで選べる埋め込みモデル。UI が名前を直書きしないための一覧。 */
+        EmbeddingModelOption: {
+            /** Format: int32 */
+            dim: number;
+            name: string;
+            revision: string;
         };
         /**
          * Format: uuid
@@ -2193,8 +2303,11 @@ export interface components {
         };
         GraphStatsResponse: {
             drift_degraded: boolean;
-            /** Format: double */
-            drift_rate: number;
+            /**
+             * Format: double
+             * @description Neo4j 側が読めないときは `null`。1.0 を返すと「100% 漂流」の誤報になる。
+             */
+            drift_rate?: number | null;
             last_build?: null | components["schemas"]["GraphBuildView"];
             /** Format: date-time */
             last_drift_checked_at?: string | null;
@@ -2202,10 +2315,13 @@ export interface components {
             last_drift_rate?: number | null;
             /** Format: int64 */
             last_event_seq: number;
+            /**
+             * Format: int64
+             * @description Neo4j に接続できないときは `null`。**0 と混同しない**（0 は「実在する 0 件」）。
+             */
+            neo4j_nodes?: number | null;
             /** Format: int64 */
-            neo4j_nodes: number;
-            /** Format: int64 */
-            neo4j_relationships: number;
+            neo4j_relationships?: number | null;
             ontology_version: string;
             /** Format: int64 */
             pending_events: number;
@@ -2245,6 +2361,11 @@ export interface components {
             risk: components["schemas"]["ImpactRisk"];
             seeds: components["schemas"]["ImpactSeedSummary"][];
             stats: components["schemas"]["ImpactStats"];
+            /**
+             * @description 既存テストとの照合。該当が無ければ空（そのとき `degraded` に
+             *     `tests_not_available` が入る）。
+             */
+            test_coverage?: components["schemas"]["ImpactTestCoverage"];
             tests_executed: boolean;
             truncated: components["schemas"]["ImpactTruncation"];
             unverified: components["schemas"]["ImpactUnverifiedItem"][];
@@ -2277,6 +2398,14 @@ export interface components {
             status: string;
             /** Format: int64 */
             total: number;
+        };
+        ImpactCoveringCase: {
+            /** Format: uuid */
+            case_id: string;
+            code: string;
+            covers_impacts: string[];
+            covers_screens: string[];
+            title: string;
         };
         ImpactEvidence: {
             /** Format: float */
@@ -2403,6 +2532,18 @@ export interface components {
             total: number;
             /** Format: int64 */
             unresolved: number;
+        };
+        /**
+         * @description 既存テストとの照合結果。
+         *
+         *     「テストが無い」と「テストはあるが今回の影響を覆っていない」は別物なので、
+         *     両方を返す。`tests_not_available` の一本槍をやめるための器。
+         */
+        ImpactTestCoverage: {
+            covered_item_ids: string[];
+            /** @description 既存ケースのうち、今回の影響項目を 1 つ以上覆っているもの。 */
+            covering_cases: components["schemas"]["ImpactCoveringCase"][];
+            uncovered_item_ids: string[];
         };
         ImpactTruncation: {
             budget: boolean;
@@ -3645,6 +3786,36 @@ export interface operations {
             };
         };
     };
+    source_text: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Source file ID */
+                fid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CodeFileTextResponse"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     detail: {
         parameters: {
             query?: never;
@@ -4098,6 +4269,44 @@ export interface operations {
             };
         };
     };
+    cancel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Job ID */
+                jid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobResponse"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     list_agent_runs: {
         parameters: {
             query?: never;
@@ -4143,6 +4352,46 @@ export interface operations {
                 };
             };
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    cancel_agent_run: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project ID */
+                pid: string;
+                /** @description Agent run ID */
+                rid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentRunView"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5112,6 +5361,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    embedding_models: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project ID */
+                pid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmbeddingModelListResponse"];
                 };
             };
             403: {
@@ -6326,6 +6605,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkflowDetailResponse"];
+                };
+            };
+        };
+    };
+    export_workflow: {
+        parameters: {
+            query?: {
+                /** @description json | yaml（既定 json） */
+                format?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Project ID */
+                pid: string;
+                /** @description Workflow ID */
+                wid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Workflow definition file */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };

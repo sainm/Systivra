@@ -20,6 +20,7 @@
     "check:ui:phase7-inquiry": "node scripts/ui-check-phase7-inquiry.mjs",
     "check:ui:phase7-mcp": "node scripts/ui-check-phase7-mcp.mjs",
     "check:ui:phase8": "node scripts/ui-check-phase8.mjs",
+    "check:ui:cancel": "node scripts/ui-check-cancel.mjs",
     "check:ui:phase5-inquiry": "node scripts/ui-check-phase5-inquiry.mjs",
     "check:ui:workflow": "node scripts/ui-check-workflow-editor.mjs"
   },

@@ -23,26 +23,14 @@ import type {
   TestOverviewResponse,
 } from "../lib/types";
 
-const SAMPLE_SOURCES = [
-  {
-    kind: "CODE",
-    field_ref: "user.addr",
-    text: "if (s.length() > 20) errors.add(...)",
-    evidence_ids: [],
-  },
-  {
-    kind: "SPEC",
-    field_ref: "user.name",
-    text: "必須項目（全角20文字以内）",
-    evidence_ids: [],
-  },
-  {
-    kind: "SPEC",
-    field_ref: "user.age",
-    text: "min=1 max=99",
-    evidence_ids: [],
-  },
-];
+/** 規約抽出の入力。ユーザーが自分で入れる（サンプルを勝手に送らない）。 */
+type RuleSource = {
+  kind: "CODE" | "SPEC";
+  field_ref: string;
+  text: string;
+};
+
+const EMPTY_SOURCE: RuleSource = { kind: "SPEC", field_ref: "", text: "" };
 
 function Metric({ label, value, tone }: { label: string; value: string | number; tone?: string }) {
   return (
@@ -157,6 +145,10 @@ export function TestPage({
   const [error, setError] = useState<unknown>(null);
   const [notice, setNotice] = useState("");
   const [impactId, setImpactId] = useState("");
+  const [sources, setSources] = useState<RuleSource[]>([{ ...EMPTY_SOURCE }]);
+  const filledSources = sources.filter(
+    (source) => source.field_ref.trim() !== "" && source.text.trim() !== "",
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -193,7 +185,14 @@ export function TestPage({
     return runAction(
       "extract",
       async () => {
-        await extractTestRules(pid, { sources: SAMPLE_SOURCES });
+        await extractTestRules(pid, {
+          sources: filledSources.map((source) => ({
+            kind: source.kind,
+            field_ref: source.field_ref.trim(),
+            text: source.text.trim(),
+            evidence_ids: [],
+          })),
+        });
       },
       t("test.notice.extract"),
     );
@@ -340,7 +339,11 @@ export function TestPage({
       <section className="panel panel-body section-gap stack">
         <h2 className="panel-title">{t("test.actions.title")}</h2>
         <div className="test-action-grid">
-          <button className="btn btn-primary btn-sm" disabled={busy !== ""} onClick={() => void doExtract()}>
+          <button
+            className="btn btn-primary btn-sm"
+            disabled={busy !== "" || filledSources.length === 0}
+            onClick={() => void doExtract()}
+          >
             {t("test.actions.extract")}
           </button>
           <div className="field">
@@ -377,6 +380,64 @@ export function TestPage({
           </button>
         </div>
         {busy ? <span className="muted">{busy}</span> : null}
+        <div className="stack section-gap">
+          <span className="faint">{t("test.sources.title")}</span>
+          {sources.map((source, index) => (
+            <div className="row row-wrap" key={index}>
+              <select
+                className="select"
+                value={source.kind}
+                onChange={(event) =>
+                  setSources((rows) =>
+                    rows.map((row, i) =>
+                      i === index ? { ...row, kind: event.target.value as RuleSource["kind"] } : row,
+                    ),
+                  )
+                }
+              >
+                <option value="SPEC">SPEC</option>
+                <option value="CODE">CODE</option>
+              </select>
+              <input
+                className="input"
+                placeholder={t("test.sources.field")}
+                value={source.field_ref}
+                onChange={(event) =>
+                  setSources((rows) =>
+                    rows.map((row, i) =>
+                      i === index ? { ...row, field_ref: event.target.value } : row,
+                    ),
+                  )
+                }
+              />
+              <input
+                className="input"
+                placeholder={t("test.sources.text")}
+                value={source.text}
+                onChange={(event) =>
+                  setSources((rows) =>
+                    rows.map((row, i) => (i === index ? { ...row, text: event.target.value } : row)),
+                  )
+                }
+              />
+              <button
+                className="btn btn-ghost btn-sm"
+                disabled={sources.length === 1}
+                onClick={() => setSources((rows) => rows.filter((_, i) => i !== index))}
+              >
+                {t("test.sources.remove")}
+              </button>
+            </div>
+          ))}
+          <div className="row row-wrap">
+            <button
+              className="btn btn-sm"
+              onClick={() => setSources((rows) => [...rows, { ...EMPTY_SOURCE }])}
+            >
+              {t("test.sources.add")}
+            </button>
+          </div>
+        </div>
       </section>
 
       <section className="panel panel-body section-gap stack">

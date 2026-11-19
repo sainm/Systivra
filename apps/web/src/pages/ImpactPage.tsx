@@ -391,7 +391,18 @@ export function ImpactPage({
               label={t("impact.metric.uncertain")}
               value={draft.stats.inferred + draft.stats.unresolved + draft.stats.conflict}
             />
+            <Metric
+              label={t("impact.metric.existingTests")}
+              value={draft.test_coverage?.covering_cases.length ?? 0}
+            />
           </section>
+          {(draft.test_coverage?.covering_cases.length ?? 0) > 0 &&
+          (draft.test_coverage?.uncovered_item_ids.length ?? 0) > 0 ? (
+            <p className="quality-warning">
+              {t("impact.coverage.uncovered")}: {draft.test_coverage?.uncovered_item_ids.length} /{" "}
+              {draft.stats.total}
+            </p>
+          ) : null}
 
           <section className="panel section-gap">
             <div className="panel-head">

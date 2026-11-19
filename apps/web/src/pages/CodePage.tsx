@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "../components/AppShell";
 import { EmptyState, ErrorNotice } from "../components/ui";
 import {
   codeFileContentUrl,
+  codeFileText,
   createCodeAnalysis,
   createCodeRepository,
   getJob,
@@ -16,6 +17,7 @@ import {
 } from "../lib/api";
 import type {
   CodeAnalysisRunResponse,
+  CodeFileTextResponse,
   CodeFactSummary,
   CodeRepositorySummary,
   CodeRevisionSummary,
@@ -46,6 +48,15 @@ export function CodePage({
   const [facts, setFacts] = useState<CodeFactSummary[]>([]);
   const [files, setFiles] = useState<CodeSourceFileSummary[]>([]);
   const [selectedFact, setSelectedFact] = useState<CodeFactSummary | null>(null);
+  const [viewer, setViewer] = useState<{
+    fileId: string;
+    path: string;
+    byteStart: number;
+    byteEnd: number;
+  } | null>(null);
+  const [viewerText, setViewerText] = useState<CodeFileTextResponse | null>(null);
+  const [viewerError, setViewerError] = useState<unknown>(null);
+  const [viewerLoading, setViewerLoading] = useState(false);
   const [path, setPath] = useState("repositories/phase4-sample");
   const [kind, setKind] = useState("DIR");
   const [defaultBranch, setDefaultBranch] = useState("main");
@@ -238,6 +249,60 @@ export function CodePage({
     }
     throw new Error(t("code.jobTimeout"));
   }
+
+  /** 証跡の位置から原文ビューアを開く。ファイルは path で引く（locator に id が無い）。 */
+  async function openSourceAt(locator: { path?: string; byte_start?: number; byte_end?: number }) {
+    const file = files.find((candidate) => candidate.path === locator.path);
+    const byteStart = locator.byte_start ?? 0;
+    const byteEnd = locator.byte_end ?? byteStart;
+    if (!file) {
+      setViewerError(new Error(`${locator.path ?? "?"} がファイル一覧に見つかりません`));
+      setViewer(null);
+      return;
+    }
+    setViewer({ fileId: file.id, path: file.path, byteStart, byteEnd });
+    setViewerText(null);
+    setViewerError(null);
+    setViewerLoading(true);
+    try {
+      setViewerText(await codeFileText(file.id));
+    } catch (cause) {
+      setViewerError(cause);
+    } finally {
+      setViewerLoading(false);
+    }
+  }
+
+  // バイト位置 → 行番号。line_starts は元ファイル基準のバイト位置（昇順）。
+  const hitRange = useMemo(() => {
+    if (!viewer || !viewerText || viewerText.line_starts.length === 0) return null;
+    const starts = viewerText.line_starts;
+    const lineOf = (byte: number) => {
+      let low = 0;
+      let high = starts.length - 1;
+      let answer = 0;
+      while (low <= high) {
+        const mid = (low + high) >> 1;
+        if (starts[mid] <= byte) {
+          answer = mid;
+          low = mid + 1;
+        } else {
+          high = mid - 1;
+        }
+      }
+      return answer;
+    };
+    const start = lineOf(viewer.byteStart);
+    const end = lineOf(Math.max(viewer.byteStart, viewer.byteEnd));
+    return { start, end };
+  }, [viewer, viewerText]);
+
+  const viewerRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!hitRange) return;
+    const node = viewerRef.current?.querySelector<HTMLElement>(".source-line-hit");
+    node?.scrollIntoView({ block: "center" });
+  }, [hitRange]);
 
   return (
     <AppShell me={me} project={membership} active="code" onLoggedOut={onLoggedOut}>
@@ -579,7 +644,20 @@ export function CodePage({
                 {selectedFact.evidence.map((evidence) => {
                   const locator = asCodeLocator(evidence.locator);
                   return (
-                    <div key={evidence.id} className="stack-sm">
+                    <div
+                      key={evidence.id}
+                      className="stack-sm source-evidence"
+                      role="button"
+                      tabIndex={0}
+                      title={t("code.viewer.title")}
+                      onClick={() => void openSourceAt(locator)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          void openSourceAt(locator);
+                        }
+                      }}
+                    >
                       <div className="row row-wrap">
                         <span className="chip mono">{locator.path}</span>
                         <span className="chip num">
@@ -597,6 +675,52 @@ export function CodePage({
             ) : (
               <p className="muted m-0">{t("code.selectFactHint")}</p>
             )}
+            {viewer || viewerError ? (
+              <div className="source-viewer-wrap section-gap">
+                <div className="row row-wrap">
+                  <span className="panel-title">{t("code.viewer.title")}</span>
+                  <span className="chip mono">{viewer?.path ?? "-"}</span>
+                  {hitRange ? (
+                    <span className="chip num">
+                      L{hitRange.start + 1}
+                      {hitRange.end > hitRange.start ? `–${hitRange.end + 1}` : ""}
+                    </span>
+                  ) : null}
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => {
+                      setViewer(null);
+                      setViewerText(null);
+                      setViewerError(null);
+                    }}
+                  >
+                    {t("code.viewer.close")}
+                  </button>
+                </div>
+                {viewerError ? <ErrorNotice error={viewerError} /> : null}
+                {viewerLoading ? <p className="muted m-0">{t("common.loading")}</p> : null}
+                {viewerText?.truncated ? (
+                  <p className="quality-warning m-0">{t("code.viewer.truncated")}</p>
+                ) : null}
+                {viewerText ? (
+                  <div className="source-viewer" ref={viewerRef}>
+                    {viewerText.lines.map((line, index) => (
+                      <div
+                        key={index}
+                        className={`source-line${
+                          hitRange && index >= hitRange.start && index <= hitRange.end
+                            ? " source-line-hit"
+                            : ""
+                        }`}
+                      >
+                        <span className="source-line-no">{index + 1}</span>
+                        <span className="source-line-text">{line === "" ? " " : line}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         </aside>
       </div>

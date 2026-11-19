@@ -10,6 +10,8 @@ const PHASE_KEY: Record<string, MessageKey> = {
   PARSE: "phase.PARSE",
   DONE: "phase.DONE",
   FAILED: "phase.FAILED",
+  CANCELLING: "phase.CANCELLING",
+  CANCELLED: "phase.CANCELLED",
 };
 
 export function statusText(status: string, t: (key: MessageKey) => string): string {
@@ -78,7 +80,10 @@ export function JobStrip({ job }: { job: JobResponse }) {
       : job.status === "SUCCEEDED"
         ? 100
         : 4;
-  const phaseKey = PHASE_KEY[job.progress.phase] ?? "status.RUNNING";
+  const phaseKey =
+    job.status === "CANCELLED"
+      ? "phase.CANCELLED"
+      : (PHASE_KEY[job.progress.phase] ?? "status.RUNNING");
   const phase = t(phaseKey);
   return (
     <div className="job-strip">

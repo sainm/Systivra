@@ -2179,3 +2179,46 @@ body.drawer-open {
     min-height: 420px;
   }
 }
+
+/* 原文ビューア（証跡の行ハイライト）。 */
+.source-evidence {
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 4px 6px;
+  margin-left: -6px;
+}
+.source-evidence:hover,
+.source-evidence:focus-visible {
+  background: var(--surface-2, rgba(127, 127, 127, 0.08));
+  outline: none;
+}
+.source-viewer {
+  max-height: 420px;
+  overflow: auto;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+  border-radius: 6px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  line-height: 1.55;
+  padding: 6px 0;
+  background: var(--surface, transparent);
+}
+.source-line {
+  display: flex;
+  gap: 10px;
+  padding: 0 8px;
+  white-space: pre;
+}
+.source-line-no {
+  flex: 0 0 44px;
+  text-align: right;
+  opacity: 0.45;
+  user-select: none;
+}
+.source-line-text {
+  flex: 1 1 auto;
+}
+.source-line-hit {
+  background: rgba(255, 193, 7, 0.22);
+  box-shadow: inset 3px 0 0 rgba(255, 152, 0, 0.9);
+}

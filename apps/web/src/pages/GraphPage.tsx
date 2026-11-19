@@ -129,8 +129,16 @@ export function GraphPage({
             <>
               <span className="chip num">{t("graph.nodes")}: {stats.pg_nodes}</span>
               <span className="chip num">{t("graph.relationships")}: {stats.pg_relationships}</span>
-              <span className="chip num">Neo4j: {stats.neo4j_nodes}/{stats.neo4j_relationships}</span>
-              <span className="chip num">{t("graph.drift")}: {stats.drift_rate.toFixed(3)}</span>
+              <span className="chip num">
+                Neo4j:{" "}
+                {stats.neo4j_nodes == null
+                  ? t("graph.neo4jUnavailable")
+                  : `${stats.neo4j_nodes}/${stats.neo4j_relationships}`}
+              </span>
+              <span className="chip num">
+                {t("graph.drift")}:{" "}
+                {stats.drift_rate == null ? "—" : stats.drift_rate.toFixed(3)}
+              </span>
               <span className="chip num">{t("graph.pendingEvents")}: {stats.pending_events}</span>
               <span className="chip num">
                 {t("graph.lastDrift")}: {stats.last_drift_checked_at ? new Date(stats.last_drift_checked_at).toLocaleString("ja-JP") : "-"}

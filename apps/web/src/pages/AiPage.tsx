@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { AppShell } from "../components/AppShell";
 import { ErrorNotice } from "../components/ui";
 import {
+  cancelAgentRun,
   createAgentRun,
   createWorkflow,
   createWorkflowRun,
@@ -42,12 +43,11 @@ function statusClass(status: string): string {
 /** 承認の起票元。Workflow のノードか、MCP の許可証か、Agent の実行か。 */
 function approvalSource(approval: {
   workflow_run_id?: string | null;
-  run_id?: string | null;
   action: string;
 }): "workflow" | "mcp" | "agent" {
   if (approval.workflow_run_id) return "workflow";
-  if (approval.run_id) return "agent";
   if (approval.action.startsWith("mcp.call:")) return "mcp";
+  // 残りは Agent 由来。`run_id` は列だけ在って常に NULL なので見ない。
   return "agent";
 }
 
@@ -67,6 +67,7 @@ export function AiPage({
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
+  const actionSeq = useRef(0);
   const [error, setError] = useState<unknown>(null);
 
   const [agentCode, setAgentCode] = useState("impact-analyst");
@@ -102,17 +103,18 @@ export function AiPage({
   }, [load]);
 
   async function runAction(key: string, work: () => Promise<void>, message: string) {
+    const seq = (actionSeq.current += 1);
     setBusy(key);
     setError(null);
     setNotice("");
     try {
       await work();
-      setNotice(message);
+      if (actionSeq.current === seq) setNotice(message);
       await load();
     } catch (cause) {
-      setError(cause);
+      if (actionSeq.current === seq) setError(cause);
     } finally {
-      setBusy("");
+      if (actionSeq.current === seq) setBusy("");
     }
   }
 
@@ -148,13 +150,25 @@ export function AiPage({
       "run",
       async () => {
         const accepted = await createAgentRun(pid, agentCode, { question });
+        setOverview(await getAiOverview(pid));
         for (let attempt = 0; attempt < 60; attempt += 1) {
           const job = await getJob(accepted.job_id);
-          if (["SUCCEEDED", "SUCCEEDED_WITH_ERRORS", "FAILED"].includes(job.status)) break;
+          if (["SUCCEEDED", "SUCCEEDED_WITH_ERRORS", "FAILED", "CANCELLED"].includes(job.status)) break;
           await new Promise((resolve) => setTimeout(resolve, 500));
+          setOverview(await getAiOverview(pid));
         }
       },
       t("ai.notice.agentRun"),
+    );
+  }
+
+  function doCancelRun(runId: string) {
+    return runAction(
+      `cancel:${runId}`,
+      async () => {
+        await cancelAgentRun(pid, runId);
+      },
+      t("ai.notice.runCancelled"),
     );
   }
 
@@ -191,7 +205,7 @@ export function AiPage({
         const accepted = await createWorkflowRun(pid, workflowId);
         for (let attempt = 0; attempt < 60; attempt += 1) {
           const job = await getJob(accepted.job_id);
-          if (["SUCCEEDED", "SUCCEEDED_WITH_ERRORS", "FAILED"].includes(job.status)) break;
+          if (["SUCCEEDED", "SUCCEEDED_WITH_ERRORS", "FAILED", "CANCELLED"].includes(job.status)) break;
           await new Promise((resolve) => setTimeout(resolve, 500));
         }
       },
@@ -380,7 +394,18 @@ export function AiPage({
                     <span className={statusClass(run.status)}>{run.status}</span>
                   </td>
                   <td className="num">
-                    {run.error ? JSON.stringify(run.error) : run.output ? "narrative" : "-"}
+                    <span className="row row-wrap">
+                      {["PENDING", "RUNNING", "WAITING_APPROVAL"].includes(run.status) ? (
+                        <button
+                          className="btn btn-sm"
+                          disabled={busy === `cancel:${run.id}`}
+                          onClick={() => void doCancelRun(run.id)}
+                        >
+                          {t("ai.run.cancel")}
+                        </button>
+                      ) : null}
+                      {run.error ? JSON.stringify(run.error) : run.output ? "narrative" : "-"}
+                    </span>
                   </td>
                 </tr>
               ))}

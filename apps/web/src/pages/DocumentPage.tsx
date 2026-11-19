@@ -4,6 +4,7 @@ import type { MessageKey } from "../i18n";
 import { useT } from "../i18n";
 import {
   activateDocumentRevision,
+  cancelJob,
   deleteDocument,
   documentRevisionContentUrl,
   getDocument,
@@ -97,6 +98,15 @@ export function DocumentPage({
     }
   }
 
+  async function cancelParse() {
+    if (!job) return;
+    try {
+      setJob(await cancelJob(job.job_id));
+    } catch (cause) {
+      setError(cause);
+    }
+  }
+
   async function activateRevision(revisionId: string) {
     setActivating(revisionId);
     try {
@@ -166,8 +176,17 @@ export function DocumentPage({
             </Link>
           ) : null}
           {revision ? (
-            <button className="btn" onClick={() => void runParse()} disabled={!revision}>
+            <button
+              className="btn"
+              onClick={() => void runParse()}
+              disabled={job !== null && !TERMINAL.has(job.status)}
+            >
               {revision.parse_status === "NOT_PARSED" ? t("document.parse") : t("document.reparse")}
+            </button>
+          ) : null}
+          {job && !TERMINAL.has(job.status) ? (
+            <button className="btn" onClick={() => void cancelParse()}>
+              {t("document.cancelParse")}
             </button>
           ) : null}
           <button className="btn btn-danger" onClick={() => setConfirmOpen(true)}>
