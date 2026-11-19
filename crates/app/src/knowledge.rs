@@ -15,6 +15,34 @@ use crate::error::AppError;
 use crate::App;
 
 impl App {
+    /// 索引ビルドで選べる埋め込みモデル。UI が名前を直書きしないための一覧。
+    pub async fn embedding_models(
+        &self,
+        auth: &Authenticated,
+        project: ProjectId,
+    ) -> Result<contracts::EmbeddingModelListResponse, AppError> {
+        let role = self
+            .role_in(auth.user_id, project)
+            .await?
+            .ok_or(AppError::NotFound(ErrorCode::NotFound))?;
+        if !Permission::Search.access_for(role).can_read() {
+            return Err(AppError::Forbidden("knowledge:read がありません".into()));
+        }
+        let mut tx = self.store().begin_scoped(project).await?;
+        let rows = self.store().list_embedding_models(&mut tx).await?;
+        store::commit(tx).await?;
+        Ok(contracts::EmbeddingModelListResponse {
+            items: rows
+                .into_iter()
+                .map(|(name, revision, dim)| contracts::EmbeddingModelOption {
+                    name,
+                    revision,
+                    dim,
+                })
+                .collect(),
+        })
+    }
+
     /// 既存 chunk の `tokenized` を現在の tokenizer で作り直す。
     ///
     /// 日本語形態素（Lindera / IPADIC）は実装済みだが、**既に保存された

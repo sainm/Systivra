@@ -3,17 +3,16 @@
 //! 設計（`03-技術選定` §4）に合わせ、モデル名は Agent 定義に書かず
 //! `model_profile`（fast / reasoning / long_context）を設定へ写像する。
 //!
-//! TLS は扱わない（`http://` のみ）。閉域の vLLM / Ollama を想定し、
-//! 外部 SaaS を使う場合は手前に TLS 終端を置く。未設定なら
-//! `Unavailable` を返し、**生成物を捏造しない**。
+//! `http://` と `https://` の両方を受ける（rustls）。閉域の vLLM / Ollama は
+//! 自己署名証明書を使うことが多いので、`AI_CA_BUNDLE` で CA を足せる。
+//! 未設定なら `Unavailable` を返し、**生成物を捏造しない**。
 
 use std::collections::BTreeMap;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde_json::{json, Value};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AiStatus {
@@ -182,9 +181,41 @@ impl AiProvider for DisabledAiProvider {
     }
 }
 
+/// 共有 HTTP クライアント。`AI_CA_BUNDLE`（PEM）があれば自己署名 CA を信頼する。
+///
+/// 閉域の vLLM / Ollama は自己署名証明書が多く、`AI_TLS_INSECURE` のような
+/// 「検証を切る」逃げ道は用意しない（切ったことに気付けなくなる）。
+fn build_client() -> Result<reqwest::Client, String> {
+    build_client_with(std::env::var("AI_CA_BUNDLE").ok().as_deref())
+}
+
+fn build_client_with(ca_bundle: Option<&str>) -> Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(60));
+    if let Some(path) = ca_bundle {
+        // **設定したのに読めない**なら黙って OS の既定 CA に落とさない。
+        // 自己署名の閉域環境で「なぜか繋がらない」の原因が消えるため。
+        let pem = std::fs::read(path)
+            .map_err(|error| format!("AI_CA_BUNDLE ({path}) を読めません: {error}"))?;
+        let certs = reqwest::Certificate::from_pem_bundle(&pem)
+            .map_err(|error| format!("AI_CA_BUNDLE ({path}) を解釈できません: {error}"))?;
+        if certs.is_empty() {
+            return Err(format!("AI_CA_BUNDLE ({path}) に証明書が入っていません"));
+        }
+        for cert in certs {
+            builder = builder.add_root_certificate(cert);
+        }
+    }
+    builder
+        .build()
+        .map_err(|error| format!("AI 用 HTTP クライアントを作れません: {error}"))
+}
+
 pub struct OpenAiCompatProvider {
     base_url: String,
     api_key: Option<String>,
+    client: Result<reqwest::Client, String>,
     models: BTreeMap<String, String>,
 }
 
@@ -206,31 +237,19 @@ impl OpenAiCompatProvider {
             base_url: base_url.into(),
             api_key,
             models,
+            client: build_client(),
         }
     }
 
-    fn endpoint(&self) -> Result<(String, u16, String), AiError> {
-        let rest = self
-            .base_url
-            .strip_prefix("http://")
-            .ok_or_else(|| AiError::Upstream("only http:// base URLs are supported".into()))?;
-        let (authority, base_path) = match rest.find('/') {
-            Some(index) => (&rest[..index], &rest[index..]),
-            None => (rest, ""),
-        };
-        if authority.is_empty() {
-            return Err(AiError::Upstream("empty AI base URL".into()));
+    /// `/chat/completions` の完全 URL。http / https のどちらも同じ組み立て。
+    fn completions_url(&self) -> Result<String, AiError> {
+        let base = self.base_url.trim_end_matches('/');
+        if !(base.starts_with("http://") || base.starts_with("https://")) {
+            return Err(AiError::Upstream(
+                "AI_BASE_URL は http:// か https:// で始めてください".into(),
+            ));
         }
-        let (host, port) = match authority.rsplit_once(':') {
-            Some((host, port)) if !host.contains(']') => (
-                host.to_owned(),
-                port.parse::<u16>()
-                    .map_err(|_| AiError::Upstream("invalid AI base port".into()))?,
-            ),
-            _ => (authority.to_owned(), 80),
-        };
-        let path = format!("{}/chat/completions", base_path.trim_end_matches('/'));
-        Ok((host, port, path))
+        Ok(format!("{base}/chat/completions"))
     }
 }
 
@@ -299,10 +318,46 @@ impl AiProvider for OpenAiCompatProvider {
                 }))
                 .collect::<Vec<_>>());
         }
-        let (host, port, path) = self.endpoint()?;
-        let body = body.to_string();
-        let raw = http_post(&host, port, &path, body.as_bytes(), self.api_key.as_deref()).await?;
-        let value: Value = serde_json::from_slice(&raw)
+        let url = self.completions_url()?;
+        let client = self
+            .client
+            .as_ref()
+            .map_err(|error| AiError::Upstream(error.clone()))?;
+        let mut request = client
+            .post(url)
+            .header(CONTENT_TYPE, "application/json")
+            .body(body.to_string());
+        if let Some(key) = &self.api_key {
+            request = request.header(AUTHORIZATION, format!("Bearer {key}"));
+        }
+        let response = request.send().await.map_err(|error| {
+            if error.is_timeout() {
+                AiError::Timeout
+            } else {
+                // 表層の "error sending request" だけでは TLS か DNS か分からない。
+                // source を連結して 1 行に残す。
+                let mut detail = error.to_string();
+                let mut source = std::error::Error::source(&error);
+                while let Some(cause) = source {
+                    detail.push_str(&format!(": {cause}"));
+                    source = cause.source();
+                }
+                AiError::Upstream(format!("AI への接続に失敗: {detail}"))
+            }
+        })?;
+        let status = response.status();
+        let text = response
+            .text()
+            .await
+            .map_err(|error| AiError::Upstream(format!("AI の応答を読めません: {error}")))?;
+        if status.as_u16() >= 400 {
+            return Err(AiError::Upstream(format!(
+                "HTTP {}: {}",
+                status.as_u16(),
+                text.chars().take(200).collect::<String>()
+            )));
+        }
+        let value: Value = serde_json::from_str(&text)
             .map_err(|error| AiError::Upstream(format!("invalid JSON: {error}")))?;
         let message = value
             .get("choices")
@@ -377,97 +432,6 @@ pub fn from_env() -> Box<dyn AiProvider> {
     }
 }
 
-async fn http_post(
-    host: &str,
-    port: u16,
-    path: &str,
-    body: &[u8],
-    api_key: Option<&str>,
-) -> Result<Vec<u8>, AiError> {
-    let mut stream =
-        tokio::time::timeout(Duration::from_secs(10), TcpStream::connect((host, port)))
-            .await
-            .map_err(|_| AiError::Timeout)?
-            .map_err(|error| AiError::Upstream(format!("connect {host}:{port}: {error}")))?;
-
-    let auth = api_key
-        .map(|key| format!("Authorization: Bearer {key}\r\n"))
-        .unwrap_or_default();
-    let head = format!(
-        "POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Type: application/json\r\n\
-         Content-Length: {}\r\nConnection: close\r\n{auth}\r\n",
-        body.len()
-    );
-    stream
-        .write_all(head.as_bytes())
-        .await
-        .map_err(|error| AiError::Upstream(error.to_string()))?;
-    stream
-        .write_all(body)
-        .await
-        .map_err(|error| AiError::Upstream(error.to_string()))?;
-
-    let mut buffer = Vec::new();
-    tokio::time::timeout(Duration::from_secs(60), stream.read_to_end(&mut buffer))
-        .await
-        .map_err(|_| AiError::Timeout)?
-        .map_err(|error| AiError::Upstream(error.to_string()))?;
-
-    let split = buffer
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .ok_or_else(|| AiError::Upstream("malformed HTTP response".into()))?;
-    let head_text = String::from_utf8_lossy(&buffer[..split]).to_ascii_lowercase();
-    let status = head_text
-        .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .and_then(|code| code.parse::<u16>().ok())
-        .unwrap_or(0);
-    let mut payload = buffer[split + 4..].to_vec();
-    if head_text.contains("transfer-encoding: chunked") {
-        payload = decode_chunked(&payload)?;
-    }
-    if status >= 400 {
-        return Err(AiError::Upstream(format!(
-            "HTTP {status}: {}",
-            String::from_utf8_lossy(&payload)
-                .chars()
-                .take(200)
-                .collect::<String>()
-        )));
-    }
-    Ok(payload)
-}
-
-/// chunked は文字境界を保証しないのでバイト列で連結する。
-fn decode_chunked(raw: &[u8]) -> Result<Vec<u8>, AiError> {
-    let mut out = Vec::new();
-    let mut rest = raw;
-    loop {
-        let newline = rest
-            .windows(2)
-            .position(|window| window == b"\r\n")
-            .ok_or_else(|| AiError::Upstream("bad chunk header".into()))?;
-        let header = String::from_utf8_lossy(&rest[..newline]);
-        let size = usize::from_str_radix(header.trim().split(';').next().unwrap_or("0"), 16)
-            .map_err(|_| AiError::Upstream("bad chunk size".into()))?;
-        if size == 0 {
-            break;
-        }
-        let start = newline + 2;
-        if rest.len() < start + size {
-            return Err(AiError::Upstream("truncated chunk".into()));
-        }
-        out.extend_from_slice(&rest[start..start + size]);
-        rest = &rest[(start + size).min(rest.len())..];
-        if rest.starts_with(b"\r\n") {
-            rest = &rest[2..];
-        }
-    }
-    Ok(out)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -482,25 +446,33 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_parses_http_base() {
-        let provider = OpenAiCompatProvider::new("http://127.0.0.1:11434/v1", None);
-        let (host, port, path) = provider.endpoint().expect("endpoint");
-        assert_eq!(host, "127.0.0.1");
-        assert_eq!(port, 11434);
-        assert_eq!(path, "/v1/chat/completions");
+    fn completions_url_accepts_http_and_https() {
+        let http = OpenAiCompatProvider::new("http://127.0.0.1:11434/v1", None);
+        assert_eq!(
+            http.completions_url().expect("http"),
+            "http://127.0.0.1:11434/v1/chat/completions"
+        );
+        let https = OpenAiCompatProvider::new("https://api.example.com/v1/", None);
+        assert_eq!(
+            https.completions_url().expect("https"),
+            "https://api.example.com/v1/chat/completions"
+        );
     }
 
     #[test]
-    fn https_is_rejected_explicitly() {
-        let provider = OpenAiCompatProvider::new("https://api.example.com/v1", None);
-        assert!(matches!(provider.endpoint(), Err(AiError::Upstream(_))));
+    fn unreadable_ca_bundle_fails_loudly() {
+        // 設定したのに読めないとき、黙って OS の既定 CA に落とさない。
+        let error = build_client_with(Some("/definitely/not/here/ca.pem")).expect_err("must fail");
+        assert!(error.contains("AI_CA_BUNDLE"), "{error}");
     }
 
     #[test]
-    fn chunked_body_is_decoded() {
-        let raw = b"4\r\n{\"a\"\r\n3\r\n:1}\r\n0\r\n\r\n";
-        let out = decode_chunked(raw).expect("chunked");
-        assert_eq!(String::from_utf8_lossy(&out), "{\"a\":1}");
+    fn scheme_less_base_is_rejected() {
+        let provider = OpenAiCompatProvider::new("127.0.0.1:11434/v1", None);
+        assert!(matches!(
+            provider.completions_url(),
+            Err(AiError::Upstream(_))
+        ));
     }
 
     #[test]

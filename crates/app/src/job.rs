@@ -31,6 +31,97 @@ impl App {
         Ok(job_response(&job))
     }
 
+    pub async fn cancel_job(
+        &self,
+        auth: &Authenticated,
+        job_id: JobId,
+    ) -> Result<JobResponse, AppError> {
+        let (project, role) = self
+            .scope_for_resource(auth.user_id, "job", job_id.0)
+            .await?;
+        let mut tx = self.store().begin_scoped(project).await?;
+        let job = self
+            .store()
+            .find_job(&mut tx, job_id.0)
+            .await?
+            .ok_or(AppError::NotFound(ErrorCode::NotFoundJob))?;
+        let permission = if job.kind == "AGENT_RUN" {
+            Permission::AgentRun
+        } else {
+            Permission::DocumentIngest
+        };
+        if !permission.access_for(role).can_write() {
+            return Err(AppError::NotFound(ErrorCode::NotFoundJob));
+        }
+        let outcome = self
+            .store()
+            .request_job_cancel(&mut tx, job_id.0)
+            .await?
+            .ok_or(AppError::Conflict(ErrorCode::ConflictJobTerminal))?;
+        if outcome == store::CancelOutcome::Immediate && job.kind == "DOCUMENT_PARSE" {
+            if let Some(run_id) = job
+                .input
+                .get("parse_run_id")
+                .and_then(Value::as_str)
+                .and_then(|value| Uuid::parse_str(value).ok())
+            {
+                self.store()
+                    .update_parse_run(
+                        &mut tx,
+                        run_id,
+                        "CANCELLED",
+                        &json!({"page_count": 0, "chunk_count": 0}),
+                        None,
+                    )
+                    .await?;
+            }
+        }
+        self.store()
+            .append_audit(
+                &mut tx,
+                &store::AuditDraft {
+                    project_id: Some(project.0),
+                    actor_type: "USER".into(),
+                    actor_id: auth.user_id.to_string(),
+                    action: "job.cancel".into(),
+                    target_type: Some("job".into()),
+                    target_id: Some(job_id.0.to_string()),
+                    input_digest: None,
+                    result: "SUCCESS".into(),
+                    detail: json!({"kind": job.kind, "outcome": format!("{outcome:?}")}),
+                    trace_id: None,
+                },
+            )
+            .await?;
+        let job = self
+            .store()
+            .find_job(&mut tx, job_id.0)
+            .await?
+            .ok_or(AppError::NotFound(ErrorCode::NotFoundJob))?;
+        store::commit(tx).await?;
+        if outcome == store::CancelOutcome::Immediate {
+            let input_uuid = |key: &str| {
+                job.input
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .and_then(|value| Uuid::parse_str(value).ok())
+            };
+            if job.kind == "INDEX_BUILD" {
+                if let Some(build_id) = input_uuid("build_id") {
+                    let _ = self
+                        .fail_index_build(project, build_id, "cancelled by user")
+                        .await;
+                }
+            }
+            if job.kind == "AGENT_RUN" {
+                if let Some(run_id) = input_uuid("run_id") {
+                    let _ = self.cancel_agent_run_from_job(project, run_id).await;
+                }
+            }
+        }
+        Ok(job_response(&job))
+    }
+
     pub async fn job_events_since(
         &self,
         auth: &Authenticated,
@@ -84,6 +175,21 @@ impl App {
         Ok(job)
     }
 
+    /// 監査ログの月次パーティション維持（期限切れ DROP + 先の月の追加）。
+    pub async fn maintain_audit_partitions(
+        &self,
+        retention_months: i32,
+        ahead_months: i32,
+    ) -> Result<serde_json::Value, AppError> {
+        let mut tx = self.store().begin_unscoped().await?;
+        let result = self
+            .store()
+            .maintain_audit_partitions(&mut tx, retention_months, ahead_months)
+            .await?;
+        store::commit(tx).await?;
+        Ok(result)
+    }
+
     pub async fn requeue_stalled_jobs(&self, stale_seconds: i64) -> Result<(u64, u64), AppError> {
         let mut tx = self.store().begin_unscoped().await?;
         let counts = self.store().requeue_stalled(&mut tx, stale_seconds).await?;
@@ -124,6 +230,17 @@ impl App {
         self.store().heartbeat(&mut tx, job_id).await?;
         store::commit(tx).await?;
         Ok(())
+    }
+
+    pub async fn job_cancel_requested(
+        &self,
+        project: ProjectId,
+        job_id: Uuid,
+    ) -> Result<bool, AppError> {
+        let mut tx = self.store().begin_scoped(project).await?;
+        let flagged = self.store().job_cancel_requested(&mut tx, job_id).await?;
+        store::commit(tx).await?;
+        Ok(flagged)
     }
 
     pub async fn append_job_event(

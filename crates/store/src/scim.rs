@@ -110,6 +110,31 @@ impl Store {
         Ok(result.rows_affected() > 0)
     }
 
+    /// SCIM の PUT / PATCH から来るユーザー属性の更新。
+    ///
+    /// `login_id` は認証の識別子なので触らない（変更は 400 で拒否する）。
+    pub async fn update_scim_user(
+        &self,
+        tx: &mut Tx<'_>,
+        id: UserId,
+        display_name: &str,
+        email: Option<&str>,
+        active: bool,
+    ) -> Result<bool, StoreError> {
+        let result = sqlx::query(
+            "UPDATE core.app_user
+                SET display_name = $2, email = $3, is_active = $4
+              WHERE id = $1",
+        )
+        .bind(id.0)
+        .bind(display_name)
+        .bind(email)
+        .bind(active)
+        .execute(&mut **tx)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     pub async fn list_scim_groups(&self, tx: &mut Tx<'_>) -> Result<Vec<ScimGroupRow>, StoreError> {
         let groups = sqlx::query(
             "SELECT id, provider, external_id, display_name, role

@@ -811,6 +811,43 @@ impl Store {
         Ok(row.as_ref().map(test_execution_row))
     }
 
+    /// 既存ケースのうち、指定の影響項目 / 画面を覆っているもの。
+    ///
+    /// **草稿（DRAFT）も含める。** 「既に誰かが書いた」こと自体が情報で、
+    /// 承認済みかどうかは `status` で判断すればよい。
+    pub async fn cases_covering(
+        &self,
+        tx: &mut Tx<'_>,
+        project_id: Uuid,
+        item_ids: &[Uuid],
+        screens: &[String],
+    ) -> Result<Vec<CoveringCaseRow>, StoreError> {
+        if item_ids.is_empty() && screens.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query(
+            "SELECT id, code, title, covers_impacts, covers_screens
+               FROM test.test_case
+              WHERE project_id = $1
+                AND (covers_impacts && $2::uuid[] OR covers_screens && $3::text[])",
+        )
+        .bind(project_id)
+        .bind(item_ids)
+        .bind(screens)
+        .fetch_all(&mut **tx)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|row| CoveringCaseRow {
+                id: row.get("id"),
+                code: row.get("code"),
+                title: row.get("title"),
+                covers_impacts: row.get("covers_impacts"),
+                covers_screens: row.get("covers_screens"),
+            })
+            .collect())
+    }
+
     pub async fn executions_with_artifacts(
         &self,
         tx: &mut Tx<'_>,
@@ -1271,4 +1308,14 @@ fn test_execution_row(row: &sqlx::postgres::PgRow) -> TestExecutionRow {
         fingerprint: row.get("fingerprint"),
         artifacts: row.get("artifacts"),
     }
+}
+
+/// 既存テストの照合用（一覧に出す最小限）。
+#[derive(Debug, Clone)]
+pub struct CoveringCaseRow {
+    pub id: Uuid,
+    pub code: String,
+    pub title: String,
+    pub covers_impacts: Vec<Uuid>,
+    pub covers_screens: Vec<String>,
 }

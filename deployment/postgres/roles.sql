@@ -163,6 +163,15 @@ BEGIN
     GRANT EXECUTE ON FUNCTION core.project_of(text, uuid)
       TO systivra_app, systivra_worker, systivra_scheduler;
   END IF;
+  IF to_regprocedure('core.request_job_cancel(uuid)') IS NOT NULL THEN
+    GRANT EXECUTE ON FUNCTION core.request_job_cancel(uuid) TO systivra_app;
+  END IF;
+  -- 監査ログの月次パーティション維持（期限切れ月の DROP + 先の月の追加）。
+  -- 破壊的だが「丸ごと期限切れの月」しか落とさない。worker だけに渡す。
+  IF to_regprocedure('core.maintain_audit_partitions(integer, integer)') IS NOT NULL THEN
+    GRANT EXECUTE ON FUNCTION core.maintain_audit_partitions(integer, integer)
+      TO systivra_scheduler;
+  END IF;
 END
 $$;
 

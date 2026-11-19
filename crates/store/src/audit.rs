@@ -94,4 +94,23 @@ impl Store {
             })
             .collect())
     }
+    /// 監査ログの月次パーティションを維持する。
+    ///
+    /// 期限切れの月は **DROP** する（DELETE ではない）。`core.audit_log` は
+    /// 追記専用で app / worker から DELETE を剥がしてあるので、保持期間のために
+    /// その約束を崩さない。関数は SECURITY DEFINER で、対象を
+    /// `audit_log_YYYYMM` に限定している。
+    pub async fn maintain_audit_partitions(
+        &self,
+        tx: &mut Tx<'_>,
+        retention_months: i32,
+        ahead_months: i32,
+    ) -> Result<Value, StoreError> {
+        let row = sqlx::query("SELECT core.maintain_audit_partitions($1, $2) AS result")
+            .bind(retention_months)
+            .bind(ahead_months)
+            .fetch_one(&mut **tx)
+            .await?;
+        Ok(row.get("result"))
+    }
 }

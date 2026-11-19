@@ -153,6 +153,21 @@ pub struct CodeEvidence {
     pub confidence: f32,
 }
 
+/// ソースを行単位で返す。UI が該当行へスクロールして強調するために使う。
+///
+/// `line_starts` は**元ファイル基準のバイト位置**。文字列の index ではなく
+/// バイト位置なので、UI 側は「行頭バイト配列」として扱うこと。
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct CodeFileTextResponse {
+    pub encoding: String,
+    /// 元ファイルに完全一致で戻せるか（false ならバイト位置を信用しない）。
+    pub exact_offsets: bool,
+    pub line_starts: Vec<u32>,
+    pub lines: Vec<String>,
+    /// 行数上限で切ったか。
+    pub truncated: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CodeFactSummary {
     pub id: Uuid,

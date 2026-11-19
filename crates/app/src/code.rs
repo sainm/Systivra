@@ -436,6 +436,40 @@ impl App {
         })
     }
 
+    /// ソースを**行単位のテキスト**で返す。UI の行ハイライト用。
+    ///
+    /// 生バイトをそのまま返すと、ブラウザ側で文字コードを当てる必要があり、
+    /// Shift_JIS のファイルで行がずれる。サーバー側で解析時と同じ判定器を使う。
+    pub async fn code_source_file_text(
+        &self,
+        auth: &Authenticated,
+        project: ProjectId,
+        file_id: Uuid,
+    ) -> Result<contracts::CodeFileTextResponse, AppError> {
+        let bytes = self
+            .code_source_file_content(auth, project, file_id)
+            .await?;
+        let decoded = engine_code::text::decide(&bytes).ok_or_else(|| {
+            AppError::Validation("文字コードを確定できないため表示できません".into())
+        })?;
+        // 巨大ファイルで UI を固めないための上限。切ったことは返す。
+        const MAX_LINES: usize = 20_000;
+        let mut lines: Vec<String> = decoded.text.split('\n').map(str::to_owned).collect();
+        let mut line_starts: Vec<u32> = decoded.line_index().starts().to_vec();
+        let truncated = lines.len() > MAX_LINES;
+        if truncated {
+            lines.truncate(MAX_LINES);
+            line_starts.truncate(MAX_LINES);
+        }
+        Ok(contracts::CodeFileTextResponse {
+            encoding: decoded.encoding.name().to_string(),
+            exact_offsets: decoded.exact,
+            line_starts,
+            lines,
+            truncated,
+        })
+    }
+
     pub async fn code_source_file_content(
         &self,
         auth: &Authenticated,
@@ -589,6 +623,22 @@ impl App {
         } else {
             source_files.iter().map(|file| file.path.clone()).collect()
         };
+        // 逆依存 1 層: 変更ファイルで定義されたシンボルを呼んでいる側も解析する。
+        // 署名だけ変えた場合、変更ファイルだけを見ると呼び出し元が古いまま残る。
+        let mut caller_paths: Vec<String> = Vec::new();
+        if let Some(parent_id) = revision.parent_id {
+            let candidates = self
+                .store()
+                .reverse_dependency_paths(&mut tx, project.0, parent_id, revision_id, &changed)
+                .await?;
+            for path in candidates {
+                // 現行 revision に存在し、かつ「変更済み」でないものだけ。
+                let exists = source_files.iter().any(|file| file.path == path);
+                if exists && !changed.iter().any(|changed_path| changed_path == &path) {
+                    caller_paths.push(path);
+                }
+            }
+        }
         let mut copied_symbols = 0usize;
         let mut copied_facts = 0usize;
         if let Some(parent_id) = revision.parent_id {
@@ -606,7 +656,7 @@ impl App {
             job_id,
             "SCAN",
             0,
-            changed.len() as i64,
+            (changed.len() + caller_paths.len()) as i64,
             copied_facts as i64,
         )
         .await?;
@@ -620,7 +670,11 @@ impl App {
                 }
             }
         }));
-        let changed_set: BTreeSet<String> = changed.into_iter().collect();
+        let changed_set: BTreeSet<String> = changed
+            .iter()
+            .cloned()
+            .chain(caller_paths.iter().cloned())
+            .collect();
         let mut inputs = Vec::new();
         for file in &source_files {
             let key = format!("{}/{}", revision.snapshot_key, file.path);
@@ -682,7 +736,8 @@ impl App {
         report.files_analyzed = changed_set.len() as u64;
         let stats = json!({
             "files_total": source_files.len(),
-            "files_changed": changed_set.len(),
+            "files_changed": changed.len(),
+            "files_reanalyzed_for_callers": caller_paths.len(),
             "files_analyzed": report.files_analyzed,
             "files_skipped": report.files_skipped,
             "files_failed": files_failed,

@@ -41,6 +41,12 @@ services:
       - ./migrations/022_scim.sql:/docker-entrypoint-initdb.d/30_022_scim.sql:ro
       - ./migrations/023_first_project.sql:/docker-entrypoint-initdb.d/31_023_first_project.sql:ro
       - ./migrations/024_code_schema_repair.sql:/docker-entrypoint-initdb.d/32_024_code_schema_repair.sql:ro
+      - ./migrations/025_mcp_client.sql:/docker-entrypoint-initdb.d/33_025_mcp_client.sql:ro
+      - ./migrations/026_workflow_actor.sql:/docker-entrypoint-initdb.d/34_026_workflow_actor.sql:ro
+      - ./migrations/027_approval_consume.sql:/docker-entrypoint-initdb.d/35_027_approval_consume.sql:ro
+      - ./migrations/028_graph_projection_ops.sql:/docker-entrypoint-initdb.d/36_028_graph_projection_ops.sql:ro
+      - ./migrations/029_enterprise_ops.sql:/docker-entrypoint-initdb.d/37_029_enterprise_ops.sql:ro
+      - ./migrations/030_audit_retention.sql:/docker-entrypoint-initdb.d/38_030_audit_retention.sql:ro
       - ./deployment/postgres/roles.sql:/docker-entrypoint-initdb.d/90_roles.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d systivra"]

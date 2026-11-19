@@ -32,11 +32,68 @@ pub fn analyze_sources(inputs: &[SourceInput], options: &AnalyzeOptions) -> Batc
         ..AnalysisReport::default()
     };
 
+    // JSP は Java の索引ができてから解析する（scriptlet の CALLS 解決に必要）。
+    let mut deferred_jsp: Vec<(SourceInput, DecodedFile)> = Vec::new();
+    // TLD は JSP より先に読む（カスタムタグの解決に使う）。
+    let mut tlds: HashMap<String, jsp::tld::TldDoc> = HashMap::new();
     for input in inputs {
         let selected = !options
             .selected_paths
             .as_ref()
             .is_some_and(|selected| !selected.contains(&input.path));
+        // `.tld` は Language ではないが、JSP のカスタムタグを解決するための入力。
+        // ここで拾わないと、TLD を置いても「未添付」と誤判定する。
+        if input.path.to_ascii_lowercase().ends_with(".tld") {
+            if selected {
+                report.files_analyzed += 1;
+                match text::decide(&input.bytes) {
+                    Some(decoded) => {
+                        if let Some(doc) = jsp::tld::parse(&decoded.text) {
+                            let mut facts = Vec::new();
+                            let source_key = format!("Tld:{}", input.path);
+                            if let Some(uri) = doc.uri.clone() {
+                                for tag in &doc.tags {
+                                    facts.push(Fact {
+                                        relation: "DECLARES".into(),
+                                        subject: FactSubject {
+                                            kind: "Tld".into(),
+                                            key: source_key.clone(),
+                                        },
+                                        object: FactObject {
+                                            kind: "Tag".into(),
+                                            key: format!("{uri}#{}", tag.name),
+                                        },
+                                        resolution: FactResolution::Resolved,
+                                        confidence: 0.95,
+                                        analysis_engine: "tld".into(),
+                                        engine_version: ENGINE_VERSION.into(),
+                                        unresolved_reason: None,
+                                        candidates: Vec::new(),
+                                        evidence: Vec::new(),
+                                    });
+                                }
+                                tlds.insert(uri, doc);
+                            }
+                            files.push(tld_source_analysis(input, &decoded, facts));
+                        } else {
+                            report.errors.push(AnalysisError {
+                                path: input.path.clone(),
+                                code: "E-TLD-001".into(),
+                                message: "TLD として解析できません".into(),
+                            });
+                        }
+                    }
+                    None => report.errors.push(AnalysisError {
+                        path: input.path.clone(),
+                        code: "ENCODING_UNDETECTED".into(),
+                        message: "文字コードを確定できませんでした".into(),
+                    }),
+                }
+            } else {
+                report.files_skipped += 1;
+            }
+            continue;
+        }
         let Some(language) = Language::detect(std::path::Path::new(&input.path)) else {
             report.files_skipped += 1;
             continue;
@@ -62,7 +119,9 @@ pub fn analyze_sources(inputs: &[SourceInput], options: &AnalyzeOptions) -> Batc
                 Language::Java => {
                     prepared_java.push(prepare_java(input, language, decoded, selected))
                 }
-                Language::Jsp if selected => files.push(analyze_jsp(input, language, decoded)),
+                // JSP は**Java の索引ができてから**解析する。scriptlet の CALLS を
+                // name+arity で解決するため（JSP 単体では呼び出し先が決まらない）。
+                Language::Jsp if selected => deferred_jsp.push((input.clone(), decoded)),
                 Language::Xml if selected => files.push(analyze_xml(input, language, decoded)),
                 Language::Sql if selected => files.push(analyze_sql_file(input, language, decoded)),
                 _ => {}
@@ -70,7 +129,10 @@ pub fn analyze_sources(inputs: &[SourceInput], options: &AnalyzeOptions) -> Batc
         }
     }
 
-    finalize_java(prepared_java, &mut files, &mut report);
+    let index = finalize_java(prepared_java, &mut files, &mut report);
+    for (input, decoded) in deferred_jsp {
+        files.push(analyze_jsp(&input, Language::Jsp, decoded, &index, &tlds));
+    }
     for file in &files {
         report.symbols.extend(file.symbols.iter().cloned());
         report.facts.extend(file.facts.iter().cloned());
@@ -942,7 +1004,7 @@ fn finalize_java(
     prepared: Vec<PreparedJava>,
     files: &mut Vec<SourceAnalysis>,
     report: &mut AnalysisReport,
-) {
+) -> HashMap<(String, usize), Vec<JavaMethod>> {
     let mut types = HashMap::<String, JavaType>::new();
     let mut by_simple = HashMap::<String, Vec<String>>::new();
     let mut methods_by_name = HashMap::<(String, usize), Vec<JavaMethod>>::new();
@@ -1130,9 +1192,16 @@ fn finalize_java(
             });
         }
     }
+    methods_by_name
 }
 
-fn analyze_jsp(input: &SourceInput, language: Language, decoded: DecodedFile) -> SourceAnalysis {
+fn analyze_jsp(
+    input: &SourceInput,
+    language: Language,
+    decoded: DecodedFile,
+    index: &HashMap<(String, usize), Vec<JavaMethod>>,
+    tlds: &HashMap<String, jsp::tld::TldDoc>,
+) -> SourceAnalysis {
     let (symbols, facts, parser, error) = match decoded.exact {
         true => {
             let analysis = jsp::analyze(&decoded.text);
@@ -1166,6 +1235,11 @@ fn analyze_jsp(input: &SourceInput, language: Language, decoded: DecodedFile) ->
                     });
                 }
             }
+            // scriptlet の CALLS。JSP は影響分析で孤島になりやすいので、
+            // 画面 → Java メソッドの辺をここで張る。
+            facts.extend(jsp_call_facts(input, &decoded, &analysis, index));
+            // カスタムタグ。TLD が無い場合は**推測せず** UNRESOLVED（detail/06 A-05）。
+            facts.extend(jsp_tag_facts(input, &decoded, &analysis, tlds));
             let parser = ParserStats {
                 nodes: (analysis.html.nodes + analysis.java.nodes + analysis.members.nodes) as u64,
                 errors: (analysis.html.errors + analysis.java.errors + analysis.members.errors)
@@ -1196,6 +1270,283 @@ fn analyze_jsp(input: &SourceInput, language: Language, decoded: DecodedFile) ->
         ),
     };
     source_analysis(input, language, &decoded, symbols, facts, parser, error)
+}
+
+/// scriptlet から `CALLS` 事実を作る。
+///
+/// 合成した Java（`class J{void m(){...}}`）を tree-sitter で解析し、
+/// `method_invocation` を拾って **元ファイルのバイト位置へ戻す**。
+/// 呼び出し先は name+arity の索引で解決する（JSP には型情報が無いため）。
+fn jsp_call_facts(
+    input: &SourceInput,
+    decoded: &DecodedFile,
+    analysis: &jsp::Analyzed,
+    index: &HashMap<(String, usize), Vec<JavaMethod>>,
+) -> Vec<Fact> {
+    let mut parser = Parser::new();
+    if parser
+        .set_language(&tree_sitter_java::LANGUAGE.into())
+        .is_err()
+    {
+        return Vec::new();
+    }
+    let Some(tree) = parser.parse(&analysis.sources.statements, None) else {
+        return Vec::new();
+    };
+    let source_key = format!("Jsp:{}", input.path);
+    let source = &analysis.sources.statements;
+    let mut facts = Vec::new();
+    let mut stack = vec![tree.root_node()];
+    while let Some(node) = stack.pop() {
+        stack.extend(node.children(&mut node.walk()));
+        if node.kind() != "method_invocation" {
+            continue;
+        }
+        let Some(name_node) = node.child_by_field_name("name") else {
+            continue;
+        };
+        let method = node_text(name_node, source).to_string();
+        let arity = node
+            .child_by_field_name("arguments")
+            .map(|value| {
+                let mut cursor = value.walk();
+                value.named_children(&mut cursor).count()
+            })
+            .unwrap_or(0);
+        // 合成座標 → 元ファイル座標。ここを怠ると evidence が本文とずれる。
+        let Some((start, end)) = jsp::map_range(
+            &analysis.sources.statement_segments,
+            node.start_byte(),
+            node.end_byte(),
+        ) else {
+            continue;
+        };
+        let Some(evidence) = make_evidence(&input.path, decoded, start as usize, end as usize)
+        else {
+            continue;
+        };
+        let candidates = index
+            .get(&(method.clone(), arity))
+            .cloned()
+            .unwrap_or_default();
+        let (object_key, resolution, confidence, reason, candidate_keys) = match candidates.len() {
+            1 => (
+                candidates[0].key.clone(),
+                FactResolution::Resolved,
+                0.8,
+                None,
+                Vec::new(),
+            ),
+            0 => (
+                format!("{method}:{arity}"),
+                FactResolution::Unresolved,
+                0.0,
+                Some("scriptlet の呼び出し先を特定できない（name+arity の一致なし）".to_string()),
+                Vec::new(),
+            ),
+            _ => (
+                candidates[0].key.clone(),
+                FactResolution::Partial,
+                0.5,
+                Some("同名・同引数の候補が複数ある".to_string()),
+                candidates.iter().map(|item| item.key.clone()).collect(),
+            ),
+        };
+        facts.push(Fact {
+            relation: "CALLS".into(),
+            subject: FactSubject {
+                kind: "Screen".into(),
+                key: source_key.clone(),
+            },
+            object: FactObject {
+                kind: "Method".into(),
+                key: object_key,
+            },
+            resolution,
+            confidence,
+            analysis_engine: "jsp-scriptlet".into(),
+            engine_version: ENGINE_VERSION.into(),
+            unresolved_reason: reason,
+            candidates: candidate_keys,
+            evidence: vec![evidence],
+        });
+    }
+    facts
+}
+
+/// `.tld` を 1 ファイルとして記録する（型は文字列なので `TLD` を使う）。
+fn tld_source_analysis(
+    input: &SourceInput,
+    decoded: &DecodedFile,
+    facts: Vec<Fact>,
+) -> SourceAnalysis {
+    SourceAnalysis {
+        path: input.path.clone(),
+        language: "TLD".into(),
+        content_hash: Sha256::digest(&input.bytes).to_vec(),
+        size_bytes: input.bytes.len() as i64,
+        encoding: decoded.encoding.name().to_string(),
+        exact_offsets: decoded.is_exact(),
+        loc: decoded.line_index().starts().len() as i32,
+        line_offsets: line_offsets_bytes(decoded),
+        symbols: Vec::new(),
+        facts,
+        parser: ParserStats::default(),
+        error: None,
+    }
+}
+
+/// `<%@ taglib prefix="c" uri="..." %>` を取り出す。
+fn taglib_prefixes(analysis: &jsp::Analyzed, source: &str) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for block in &analysis.blocks {
+        if block.kind != jsp::Kind::Directive {
+            continue;
+        }
+        // 本文は `<%@` の**後ろ**から始まる（`@` は含まれない）。
+        let body = block.body(source);
+        let trimmed = body.trim_start();
+        if !trimmed.starts_with("taglib") {
+            continue;
+        }
+        let mut prefix = None;
+        let mut uri = None;
+        for attr in ["prefix", "uri"] {
+            if let Some(value) = directive_attribute(body, attr) {
+                match attr {
+                    "prefix" => prefix = Some(value),
+                    _ => uri = Some(value),
+                }
+            }
+        }
+        if let (Some(prefix), Some(uri)) = (prefix, uri) {
+            map.insert(prefix, uri);
+        }
+    }
+    map
+}
+
+/// 指令本文から `key="value"` / `key='value'` を拾う。
+fn directive_attribute(body: &str, key: &str) -> Option<String> {
+    let bytes = body.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if !body[i..].starts_with(key) {
+            i += 1;
+            continue;
+        }
+        // 直前が識別子の一部なら別の属性（例: `xprefix`）。
+        let before_ok =
+            i == 0 || !matches!(bytes[i - 1], b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_');
+        let mut j = i + key.len();
+        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        if before_ok && j < bytes.len() && bytes[j] == b'=' {
+            j += 1;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if j < bytes.len() && (bytes[j] == b'"' || bytes[j] == b'\'') {
+                let quote = bytes[j];
+                let start = j + 1;
+                let mut end = start;
+                while end < bytes.len() && bytes[end] != quote {
+                    end += 1;
+                }
+                if end <= bytes.len() {
+                    return Some(body[start..end].to_string());
+                }
+            }
+        }
+        i += key.len();
+    }
+    None
+}
+
+/// カスタムタグ（`<prefix:name`）の使用箇所から `REFERENCES` を作る。
+///
+/// TLD が無ければ **RESOLVED にしない**。何者か分からないものを通すと、
+/// 影響分析が存在しない型へ辺を張ってしまう（detail/06 A-05）。
+fn jsp_tag_facts(
+    input: &SourceInput,
+    decoded: &DecodedFile,
+    analysis: &jsp::Analyzed,
+    tlds: &HashMap<String, jsp::tld::TldDoc>,
+) -> Vec<Fact> {
+    let prefixes = taglib_prefixes(analysis, &decoded.text);
+    if prefixes.is_empty() {
+        return Vec::new();
+    }
+    let source_key = format!("Jsp:{}", input.path);
+    let html = analysis.html_text.as_str();
+    let mut facts = Vec::new();
+    let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+
+    for (prefix, uri) in &prefixes {
+        let needle = format!("<{prefix}:");
+        let mut from = 0usize;
+        while let Some(offset) = html[from..].find(&needle) {
+            let start = from + offset;
+            let name_start = start + needle.len();
+            let mut name_end = name_start;
+            let bytes = html.as_bytes();
+            while name_end < bytes.len()
+                && (bytes[name_end].is_ascii_alphanumeric()
+                    || matches!(bytes[name_end], b'_' | b'-' | b'.'))
+            {
+                name_end += 1;
+            }
+            if name_end == name_start {
+                from = name_end.max(start + needle.len());
+                continue;
+            }
+            let name = html[name_start..name_end].to_string();
+            from = name_end;
+            if !seen.insert((prefix.clone(), name.clone())) {
+                continue;
+            }
+            let Some(evidence) = make_evidence(&input.path, decoded, start, name_end) else {
+                continue;
+            };
+            let (resolution, confidence, object_key, reason) = match tlds.get(uri) {
+                None => (
+                    FactResolution::Unresolved,
+                    0.0,
+                    format!("{uri}#{name}"),
+                    Some(format!(
+                        "TLD が添付されていないため {prefix}:{name} を解決できない"
+                    )),
+                ),
+                Some(doc) if !doc.has_tag(&name) => (
+                    FactResolution::Unresolved,
+                    0.0,
+                    format!("{uri}#{name}"),
+                    Some(format!("TLD（{uri}）に {name} の定義が無い")),
+                ),
+                Some(_) => (FactResolution::Resolved, 0.9, format!("{uri}#{name}"), None),
+            };
+            facts.push(Fact {
+                relation: "REFERENCES".into(),
+                subject: FactSubject {
+                    kind: "Screen".into(),
+                    key: source_key.clone(),
+                },
+                object: FactObject {
+                    kind: "Tag".into(),
+                    key: object_key,
+                },
+                resolution,
+                confidence,
+                analysis_engine: "jsp-tag".into(),
+                engine_version: ENGINE_VERSION.into(),
+                unresolved_reason: reason,
+                candidates: Vec::new(),
+                evidence: vec![evidence],
+            });
+        }
+    }
+    facts
 }
 
 fn analyze_xml(input: &SourceInput, language: Language, decoded: DecodedFile) -> SourceAnalysis {
@@ -1762,6 +2113,133 @@ mod tests {
             path: path.into(),
             bytes: source.as_bytes().to_vec(),
         }
+    }
+
+    const TLD: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<taglib version="2.1">
+  <short-name>fmt</short-name>
+  <uri>http://java.sun.com/jsp/jstl/fmt</uri>
+  <tag><name>message</name></tag>
+  <tag><name>formatDate</name></tag>
+</taglib>"#;
+
+    const TAGGED_JSP: &str = "<%@ taglib prefix=\"fmt\" uri=\"http://java.sun.com/jsp/jstl/fmt\" %>\n<html><body><fmt:message key=\"a\"/><fmt:unknown/></body></html>\n";
+
+    #[test]
+    fn custom_tag_resolves_when_tld_present() {
+        let batch = analyze_sources(
+            &[
+                input("webapp/WEB-INF/fmt.tld", TLD),
+                input("webapp/page.jsp", TAGGED_JSP),
+            ],
+            &AnalyzeOptions::default(),
+        );
+        let resolved = batch
+            .report
+            .facts
+            .iter()
+            .find(|fact| {
+                fact.relation == "REFERENCES"
+                    && fact.object.key == "http://java.sun.com/jsp/jstl/fmt#message"
+            })
+            .expect("REFERENCES 事実");
+        assert_eq!(resolved.resolution, FactResolution::Resolved);
+        assert_eq!(resolved.analysis_engine, "jsp-tag");
+
+        // TLD 自身は DECLARES を持つ。
+        assert!(batch.report.facts.iter().any(|fact| {
+            fact.relation == "DECLARES"
+                && fact.subject.key == "Tld:webapp/WEB-INF/fmt.tld"
+                && fact.object.key.ends_with("#formatDate")
+        }));
+    }
+
+    #[test]
+    fn custom_tag_without_tld_stays_unresolved() {
+        // TLD を渡さない = 何者か決められない。推測して RESOLVED にしない。
+        let batch = analyze_sources(
+            &[input("webapp/page.jsp", TAGGED_JSP)],
+            &AnalyzeOptions::default(),
+        );
+        let fact = batch
+            .report
+            .facts
+            .iter()
+            .find(|fact| fact.relation == "REFERENCES" && fact.object.key.ends_with("#message"))
+            .expect("REFERENCES 事実");
+        assert_eq!(fact.resolution, FactResolution::Unresolved);
+        assert!(fact
+            .unresolved_reason
+            .as_deref()
+            .unwrap_or("")
+            .contains("TLD が添付されていない"));
+    }
+
+    #[test]
+    fn custom_tag_missing_in_tld_is_unresolved() {
+        let batch = analyze_sources(
+            &[
+                input("webapp/WEB-INF/fmt.tld", TLD),
+                input("webapp/page.jsp", TAGGED_JSP),
+            ],
+            &AnalyzeOptions::default(),
+        );
+        let fact = batch
+            .report
+            .facts
+            .iter()
+            .find(|fact| fact.relation == "REFERENCES" && fact.object.key.ends_with("#unknown"))
+            .expect("未定義タグの事実");
+        assert_eq!(fact.resolution, FactResolution::Unresolved);
+        assert!(fact
+            .unresolved_reason
+            .as_deref()
+            .unwrap_or("")
+            .contains("定義が無い"));
+    }
+
+    #[test]
+    fn jsp_scriptlet_produces_calls_facts() {
+        let jsp = "<%@ page import=\"demo.*\" %>\n<%\n  service.update(user);\n%>\n";
+        let batch = analyze_sources(
+            &[
+                input(
+                    "src/UserService.java",
+                    "package demo; public class UserService { public void update(Object user) {} }",
+                ),
+                input("webapp/user/edit.jsp", jsp),
+            ],
+            &AnalyzeOptions::default(),
+        );
+        let call = batch
+            .report
+            .facts
+            .iter()
+            .find(|fact| {
+                fact.relation == "CALLS"
+                    && fact.subject.key == "Jsp:webapp/user/edit.jsp"
+                    && fact.analysis_engine == "jsp-scriptlet"
+            })
+            .expect("scriptlet の CALLS 事実");
+        assert_eq!(call.object.key, "demo.UserService.update(Object)");
+        assert_eq!(call.resolution, FactResolution::Resolved);
+        assert!(!call.evidence.is_empty(), "原文の位置を指すべき");
+    }
+
+    #[test]
+    fn jsp_scriptlet_without_target_stays_unresolved() {
+        let batch = analyze_sources(
+            &[input("webapp/a.jsp", "<%\n  missing.call(1);\n%>\n")],
+            &AnalyzeOptions::default(),
+        );
+        let call = batch
+            .report
+            .facts
+            .iter()
+            .find(|fact| fact.relation == "CALLS" && fact.analysis_engine == "jsp-scriptlet")
+            .expect("CALLS 事実");
+        assert_eq!(call.resolution, FactResolution::Unresolved);
+        assert!(call.unresolved_reason.is_some());
     }
 
     #[test]

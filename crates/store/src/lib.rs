@@ -38,14 +38,14 @@ pub use document::{
 };
 pub use graph::{
     GraphEdgeRow, GraphEntityRow, GraphNeighborRow, GraphPathRow, GraphSubgraph,
-    NewProjectionDrift, OntologyRow, OutboxEvent,
+    NewProjectionDrift, OntologyEntityTypeDraft, OntologyRow, OutboxEvent,
 };
 pub use impact::{
     ChangedCodeSymbolRow, ImpactAssessmentRow, ImpactCompletion, ImpactDocumentMentionRow,
     ImpactEvidenceRow, NewImpactAssessment,
 };
 pub use inquiry::{InquiryRow, NewInquiry};
-pub use job::{EnqueuedJob, JobCompletion, JobEvent, JobRow, NewJob};
+pub use job::{CancelOutcome, EnqueuedJob, JobCompletion, JobEvent, JobRow, NewJob};
 pub use knowledge::{
     ChunkDraft, ChunkListRow, ChunkRow, EvidenceDraft, EvidenceRow, IndexBuildRow, NodeDraft,
     RetrievalLogDraft, SearchFilter, SearchHit, TreeNodeRow,

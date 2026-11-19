@@ -96,6 +96,12 @@ pub struct DeriveTestPlanRequest {
     pub max_drafts: Option<i32>,
     #[serde(default)]
     pub base_path: Option<String>,
+    /// この計画で対象にする検証ルール。省略時はプロジェクト全体。
+    ///
+    /// 指定した場合は**その範囲だけ**から派生する。未知の ID は 400
+    /// （黙って無視すると「対象にしたつもり」の計画ができる）。
+    #[serde(default)]
+    pub rule_ids: Option<Vec<Uuid>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]

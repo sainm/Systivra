@@ -2,7 +2,7 @@
 
 Systivra の PostgreSQL を **Azure Database for PostgreSQL Flexible Server**（以降
 「Azure PG」）で動かすための手引。ローカル / コンテナの PostgreSQL と同じ
-マイグレーション（`migrations/001` 〜 `027`）をそのまま使う。
+マイグレーション（`migrations/001` 〜 `030`）をそのまま使う。
 
 > 正本: [`docs/design/ja/detail/02-database-ddl.md`](../../docs/design/ja/detail/02-database-ddl.md) §0.1
 > 運用手順: [`docs/phase8/operations.md`](../../docs/phase8/operations.md)
@@ -175,7 +175,7 @@ Azure PG のポータルに「接続プール」があるが、**トランザク
 
 1. サーバー作成（PG16 以上、TLS 有効、保持期間を設定。geo 冗長は**作成時のみ**）
 2. `azure.extensions` に `vector,pg_trgm` を追加
-3. `migrations/001` 〜 `027` を順に適用
+3. `migrations/001` 〜 `030` を順に適用
 4. `deployment/postgres/roles.sql` を適用
 5. `DATABASE_URL` を `?sslmode=require` 付きで API / worker に設定
 6. `scripts/backup.sh` を定期実行（`BACKUP_UPLOAD_CMD` で Blob へ）

@@ -15,6 +15,7 @@
 #![forbid(unsafe_code)]
 
 pub mod parse;
+pub mod tld;
 
 pub use parse::{parse_html, parse_java, ParseStats};
 
@@ -257,6 +258,8 @@ pub struct Analyzed {
     pub members: ParseStats,
     pub sources: Sources,
     pub html_text: String,
+    /// 元ファイル内の JSP 構文（指令も含む）。taglib 宣言の抽出に使う。
+    pub blocks: Vec<Block>,
     pub block_count: usize,
 }
 
@@ -268,13 +271,15 @@ pub fn analyze(source: &str) -> Analyzed {
     let java = parse::parse_java(&sources.statements);
     let members = parse::parse_java(&sources.members);
 
+    let block_count = masked.blocks.len();
     Analyzed {
         html,
         java,
         members,
         sources,
         html_text: masked.text,
-        block_count: masked.blocks.len(),
+        blocks: masked.blocks,
+        block_count,
     }
 }
 

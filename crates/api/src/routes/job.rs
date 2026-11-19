@@ -15,8 +15,36 @@ use domain::JobId;
 
 pub fn router() -> Router<ApiState> {
     Router::new()
-        .route("/api/v1/jobs/{jid}", get(job))
+        .route("/api/v1/jobs/{jid}", get(job).post(cancel))
         .route("/api/v1/jobs/{jid}/events", get(events))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/jobs/{jid}:cancel",
+    params(("jid" = uuid::Uuid, Path, description = "Job ID")),
+    responses(
+        (status = 200, body = JobResponse),
+        (status = 404, body = contracts::Problem),
+        (status = 409, body = contracts::Problem)
+    )
+)]
+pub(crate) async fn cancel(
+    State(state): State<ApiState>,
+    Extension(trace): Extension<TraceId>,
+    Extension(auth): Extension<Authenticated>,
+    Path(jid_cancel): Path<String>,
+) -> Result<Json<JobResponse>, ApiError> {
+    let jid = jid_cancel
+        .strip_suffix(":cancel")
+        .ok_or_else(|| ApiError::new(ErrorCode::ValidationSchema, &trace))?;
+    let job_id = parse_job(jid, &trace)?;
+    let response = state
+        .app
+        .cancel_job(&auth, job_id)
+        .await
+        .map_err(|e| ApiError::from_app(e, &trace))?;
+    Ok(Json(response))
 }
 
 #[utoipa::path(

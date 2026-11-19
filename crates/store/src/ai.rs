@@ -313,7 +313,7 @@ impl Store {
         sqlx::query(
             "UPDATE ai.agent_run
                 SET status = $3, output = $4, cost = $5, error = $6, finished_at = now()
-              WHERE project_id = $1 AND id = $2",
+              WHERE project_id = $1 AND id = $2 AND status <> 'CANCELLED'",
         )
         .bind(project_id)
         .bind(run_id)
@@ -324,6 +324,25 @@ impl Store {
         .execute(&mut **tx)
         .await?;
         Ok(())
+    }
+
+    pub async fn cancel_run_approvals(
+        &self,
+        tx: &mut Tx<'_>,
+        project_id: Uuid,
+        run_id: Uuid,
+    ) -> Result<u64, StoreError> {
+        let result = sqlx::query(
+            "UPDATE ai.approval_request
+                SET status = 'REJECTED', decided_by = 'SYSTEM', decided_at = now(),
+                    comment = 'agent run cancelled'
+              WHERE project_id = $1 AND run_id = $2 AND status = 'PENDING'",
+        )
+        .bind(project_id)
+        .bind(run_id)
+        .execute(&mut **tx)
+        .await?;
+        Ok(result.rows_affected())
     }
 
     pub async fn agent_run(

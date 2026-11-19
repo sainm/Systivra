@@ -176,6 +176,27 @@ pub struct ImpactRisk {
     pub factors: Vec<ImpactRiskFactor>,
 }
 
+/// 既存テストとの照合結果。
+///
+/// 「テストが無い」と「テストはあるが今回の影響を覆っていない」は別物なので、
+/// 両方を返す。`tests_not_available` の一本槍をやめるための器。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ImpactTestCoverage {
+    /// 既存ケースのうち、今回の影響項目を 1 つ以上覆っているもの。
+    pub covering_cases: Vec<ImpactCoveringCase>,
+    pub covered_item_ids: Vec<Uuid>,
+    pub uncovered_item_ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ImpactCoveringCase {
+    pub case_id: Uuid,
+    pub code: String,
+    pub title: String,
+    pub covers_impacts: Vec<Uuid>,
+    pub covers_screens: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ImpactAssessmentDraft {
     pub seeds: Vec<ImpactSeedSummary>,
@@ -194,6 +215,10 @@ pub struct ImpactAssessmentDraft {
     pub approval_state: String,
     pub code_modified: bool,
     pub tests_executed: bool,
+    /// 既存テストとの照合。該当が無ければ空（そのとき `degraded` に
+    /// `tests_not_available` が入る）。
+    #[serde(default)]
+    pub test_coverage: ImpactTestCoverage,
     /// AI が付けた叙述。未生成なら None（空文字にしない）。
     #[serde(default)]
     pub narrative: Option<String>,

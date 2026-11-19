@@ -521,6 +521,34 @@ impl App {
         })
     }
 
+    pub async fn cancel_agent_run_from_job(
+        &self,
+        project: ProjectId,
+        run_id: Uuid,
+    ) -> Result<(), AppError> {
+        let mut tx = self.store().begin_scoped(project).await?;
+        if let Some(run) = self.store().agent_run(&mut tx, project.0, run_id).await? {
+            if run.status != "CANCELLED" {
+                self.store()
+                    .finish_agent_run(
+                        &mut tx,
+                        project.0,
+                        run_id,
+                        "CANCELLED",
+                        None,
+                        &run.cost,
+                        Some(&json!({"code": "JOB_CANCELLED"})),
+                    )
+                    .await?;
+                self.store()
+                    .cancel_run_approvals(&mut tx, project.0, run_id)
+                    .await?;
+            }
+        }
+        store::commit(tx).await?;
+        Ok(())
+    }
+
     pub async fn agent_run_view(
         &self,
         auth: &Authenticated,
@@ -532,6 +560,76 @@ impl App {
         let view = self.agent_run_view_in(&mut tx, project, run_id).await?;
         store::commit(tx).await?;
         view.ok_or(AppError::NotFound(contracts::ErrorCode::NotFound))
+    }
+
+    pub async fn cancel_agent_run(
+        &self,
+        auth: &Authenticated,
+        project: ProjectId,
+        run_id: Uuid,
+        trace: Option<String>,
+    ) -> Result<AgentRunView, AppError> {
+        self.require_agent_write(auth, project).await?;
+        let mut tx = self.store().begin_scoped(project).await?;
+        let run = self
+            .store()
+            .agent_run(&mut tx, project.0, run_id)
+            .await?
+            .ok_or(AppError::NotFound(contracts::ErrorCode::NotFound))?;
+        if run.status != "CANCELLED" {
+            if !matches!(
+                run.status.as_str(),
+                "PENDING" | "RUNNING" | "WAITING_APPROVAL"
+            ) {
+                return Err(AppError::Conflict(
+                    contracts::ErrorCode::ConflictJobTerminal,
+                ));
+            }
+            self.store()
+                .finish_agent_run(
+                    &mut tx,
+                    project.0,
+                    run_id,
+                    "CANCELLED",
+                    None,
+                    &run.cost,
+                    Some(&json!({"code": "JOB_CANCELLED"})),
+                )
+                .await?;
+            self.store()
+                .cancel_run_approvals(&mut tx, project.0, run_id)
+                .await?;
+            if let Some(job) = self
+                .store()
+                .find_job_by_idempotency(&mut tx, project.0, &format!("agent-run:{run_id}"))
+                .await?
+            {
+                self.store().request_job_cancel(&mut tx, job.id).await?;
+            }
+        }
+        self.store()
+            .append_audit(
+                &mut tx,
+                &store::AuditDraft {
+                    project_id: Some(project.0),
+                    actor_type: "USER".into(),
+                    actor_id: auth.user_id.to_string(),
+                    action: "ai.agent_run.cancel".into(),
+                    target_type: Some("ai.agent_run".into()),
+                    target_id: Some(run_id.to_string()),
+                    input_digest: None,
+                    result: "SUCCESS".into(),
+                    detail: json!({"status": run.status}),
+                    trace_id: trace,
+                },
+            )
+            .await?;
+        let view = self
+            .agent_run_view_in(&mut tx, project, run_id)
+            .await?
+            .ok_or(AppError::NotFound(contracts::ErrorCode::NotFound))?;
+        store::commit(tx).await?;
+        Ok(view)
     }
 
     async fn agent_run_view_in(
@@ -605,11 +703,21 @@ impl App {
         self.store()
             .start_agent_run(&mut tx, project.0, run_id)
             .await?;
+        store::commit(tx).await?;
+        let mut tx = self.store().begin_scoped(project).await?;
         let run = self
             .store()
             .agent_run(&mut tx, project.0, run_id)
             .await?
             .ok_or(AppError::NotFound(contracts::ErrorCode::NotFound))?;
+        if run.status == "CANCELLED" {
+            let view = self
+                .agent_run_view_in(&mut tx, project, run_id)
+                .await?
+                .ok_or(AppError::NotFound(contracts::ErrorCode::NotFound))?;
+            store::commit(tx).await?;
+            return Ok(view);
+        }
         let agents = self.store().list_agents(&mut tx, project.0).await?;
         let agent = agents
             .iter()
@@ -724,6 +832,11 @@ impl App {
             }));
         } else {
             loop {
+                if self.store().job_cancel_requested(&mut tx, job_id).await? {
+                    status = "CANCELLED".to_owned();
+                    error = Some(json!({"code": "JOB_CANCELLED"}));
+                    break;
+                }
                 usage.wall_time_sec = started.elapsed().as_secs() as i32;
                 if let Some(reason) = budget_exceeded(&budgets, &usage) {
                     status = "BUDGET_EXCEEDED".to_owned();
@@ -991,6 +1104,11 @@ impl App {
             }
         }
 
+        if status != "CANCELLED" && self.store().job_cancel_requested(&mut tx, job_id).await? {
+            status = "CANCELLED".to_owned();
+            output = None;
+            error = Some(json!({"code": "JOB_CANCELLED"}));
+        }
         let cost = json!({
             "tokens": usage.tokens,
             "tool_calls": usage.tool_calls,
@@ -1003,6 +1121,8 @@ impl App {
         let (status, output, cost, error) = (status, output, cost, error);
         let step_status = if status == "SUCCEEDED" {
             "PASSED"
+        } else if status == "CANCELLED" {
+            "CANCELLED"
         } else {
             "FAILED"
         };
@@ -1611,6 +1731,7 @@ impl App {
                             plan_id,
                             name: None,
                             max_drafts: Some(20),
+                            rule_ids: None,
                             base_path: None,
                         },
                         None,
@@ -2496,7 +2617,6 @@ fn approval_view(row: &store::ApprovalRow) -> ApprovalView {
         created_at: row.created_at,
         decided_at: row.decided_at,
         workflow_run_id: row.workflow_run_id,
-        run_id: row.run_id,
         consumed_at: row.consumed_at,
     }
 }
@@ -2561,8 +2681,20 @@ fn validate_workflow(definition: &WorkflowDefinition) -> Result<(), AppError> {
             )));
         }
     }
-    if !ids.values().any(|kind| kind == "start") || !ids.values().any(|kind| kind == "end") {
+    let start_ids: Vec<&String> = ids
+        .iter()
+        .filter(|(_, kind)| kind.as_str() == "start")
+        .map(|(id, _)| id)
+        .collect();
+    if start_ids.is_empty() || !ids.values().any(|kind| kind == "end") {
         return Err(AppError::Validation("start と end の両方が必要です".into()));
+    }
+    if start_ids.len() > 1 {
+        // 開始点が複数あると、どの経路で動いたのか実行後に説明できない。
+        return Err(AppError::Validation(format!(
+            "start は 1 つだけにしてください（{} 個あります）",
+            start_ids.len()
+        )));
     }
     for edge in &definition.edges {
         if !ids.contains_key(&edge.from) || !ids.contains_key(&edge.to) {
@@ -2571,8 +2703,131 @@ fn validate_workflow(definition: &WorkflowDefinition) -> Result<(), AppError> {
                 edge.from, edge.to
             )));
         }
+        if edge.from == edge.to {
+            return Err(AppError::Validation(format!(
+                "自分自身への edge は許可しません: {}",
+                edge.from
+            )));
+        }
+    }
+    // **到達できない node は実行されない。** 設定として無効なので弾く
+    // （実行後に「なぜ動かなかったのか」を追うのが一番高くつく）。
+    let mut adjacency: std::collections::BTreeMap<&str, Vec<&str>> =
+        std::collections::BTreeMap::new();
+    for edge in &definition.edges {
+        adjacency
+            .entry(edge.from.as_str())
+            .or_default()
+            .push(edge.to.as_str());
+    }
+    let start = start_ids[0].as_str();
+    let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    let mut stack = vec![start];
+    while let Some(current) = stack.pop() {
+        if !seen.insert(current) {
+            continue;
+        }
+        if let Some(next) = adjacency.get(current) {
+            stack.extend(next.iter().copied());
+        }
+    }
+    let unreachable: Vec<&str> = ids
+        .keys()
+        .map(String::as_str)
+        .filter(|id| !seen.contains(id))
+        .collect();
+    if !unreachable.is_empty() {
+        return Err(AppError::Validation(format!(
+            "start から到達できない node があります: {}",
+            unreachable.join(", ")
+        )));
+    }
+    let reachable_end = ids
+        .iter()
+        .any(|(id, kind)| kind.as_str() == "end" && seen.contains(id.as_str()));
+    if !reachable_end {
+        return Err(AppError::Validation(
+            "start から到達できる end がありません".into(),
+        ));
     }
     Ok(())
+}
+
+/// 定義を JSON / YAML で書き出す。**YAML は片方向（書き出しのみ）**。
+///
+/// 取り込みに YAML パーサを要求しない代わりに、レビューやチケット添付で
+/// 読みやすい形を出す。保存は従来どおり JSON（`detail/04`）。
+pub fn export_workflow(
+    detail: &contracts::WorkflowDetailResponse,
+    format: &str,
+) -> Result<(String, &'static str, String), AppError> {
+    match format {
+        "json" => {
+            let body = serde_json::to_string_pretty(&json!({
+                "code": detail.code,
+                "version": detail.version,
+                "definition": detail.definition,
+            }))
+            .map_err(|error| AppError::Validation(error.to_string()))?;
+            Ok((
+                format!("{body}\n"),
+                "application/json; charset=utf-8",
+                format!("{}-v{}.json", detail.code, detail.version),
+            ))
+        }
+        "yaml" => Ok((
+            yaml_workflow(detail),
+            "application/yaml; charset=utf-8",
+            format!("{}-v{}.yaml", detail.code, detail.version),
+        )),
+        other => Err(AppError::Validation(format!(
+            "format は json か yaml です: {other}"
+        ))),
+    }
+}
+
+/// YAML の block style で書き出す。文字列は常に二重引用符で囲む
+/// （`:` や `#` を含む名前で壊れないようにするため）。
+fn yaml_workflow(detail: &contracts::WorkflowDetailResponse) -> String {
+    fn quoted(value: &str) -> String {
+        let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+        format!("\"{escaped}\"")
+    }
+    fn optional(value: Option<&str>) -> String {
+        match value {
+            Some(text) => quoted(text),
+            None => "null".to_owned(),
+        }
+    }
+    let mut out = String::new();
+    out.push_str(&format!("code: {}\n", quoted(&detail.code)));
+    out.push_str(&format!("version: {}\n", detail.version));
+    out.push_str("nodes:\n");
+    for node in &detail.definition.nodes {
+        out.push_str(&format!("  - id: {}\n", quoted(&node.id)));
+        out.push_str(&format!("    kind: {}\n", quoted(&node.kind)));
+        out.push_str(&format!("    name: {}\n", quoted(&node.name)));
+        out.push_str(&format!(
+            "    capability: {}\n",
+            optional(node.capability.as_deref())
+        ));
+        out.push_str(&format!(
+            "    action: {}\n",
+            optional(node.action.as_deref())
+        ));
+        if let Some(x) = node.x.filter(|value| value.is_finite()) {
+            out.push_str(&format!("    x: {x}\n"));
+        }
+        if let Some(y) = node.y.filter(|value| value.is_finite()) {
+            out.push_str(&format!("    y: {y}\n"));
+        }
+    }
+    out.push_str("edges:\n");
+    for edge in &detail.definition.edges {
+        out.push_str(&format!("  - from: {}\n", quoted(&edge.from)));
+        out.push_str(&format!("    to: {}\n", quoted(&edge.to)));
+    }
+    out
 }
 
 /// Agent の出力は `narrative` と `hypotheses` だけを受理する。
@@ -2708,6 +2963,70 @@ mod tests {
             to: "ghost".into(),
         });
         assert!(validate_workflow(&broken).is_err());
+    }
+
+    #[test]
+    fn workflow_rejects_multiple_starts() {
+        // 開始点が複数あると、どの経路で動いたのか実行後に説明できない。
+        let mut broken = definition();
+        broken.nodes.push(WorkflowNode {
+            id: "start2".into(),
+            kind: "start".into(),
+            name: "開始2".into(),
+            capability: None,
+            action: None,
+            x: None,
+            y: None,
+        });
+        let error = validate_workflow(&broken).expect_err("2 つ目の start は弾く");
+        assert!(format!("{error:?}").contains("start は 1 つだけ"));
+    }
+
+    #[test]
+    fn workflow_rejects_unreachable_node() {
+        // 到達できない node は実行されない。設定として無効なので弾く。
+        let mut broken = definition();
+        broken.nodes.push(WorkflowNode {
+            id: "orphan".into(),
+            kind: "capability".into(),
+            name: "孤立".into(),
+            capability: Some("coverage.get".into()),
+            action: None,
+            x: None,
+            y: None,
+        });
+        let error = validate_workflow(&broken).expect_err("孤立 node は弾く");
+        assert!(format!("{error:?}").contains("到達できない"));
+    }
+
+    #[test]
+    fn workflow_rejects_self_loop() {
+        let mut broken = definition();
+        broken.edges.push(WorkflowEdge {
+            from: "gate".into(),
+            to: "gate".into(),
+        });
+        assert!(validate_workflow(&broken).is_err());
+    }
+
+    #[test]
+    fn exports_yaml_with_quoted_values() {
+        let detail = contracts::WorkflowDetailResponse {
+            id: uuid::Uuid::nil(),
+            code: "impact-regression".into(),
+            version: 2,
+            status: "ACTIVE".into(),
+            definition: definition(),
+            created_at: chrono::Utc::now(),
+        };
+        let (body, content_type, filename) = export_workflow(&detail, "yaml").expect("yaml");
+        assert!(content_type.contains("yaml"));
+        assert_eq!(filename, "impact-regression-v2.yaml");
+        assert!(body.starts_with("code: \"impact-regression\"\n"));
+        assert!(body.contains("  - id: \"start\"\n    kind: \"start\"\n"));
+        assert!(body.contains("edges:\n  - from: \"start\"\n    to: \"gate\"\n"));
+        // 括弧やコロンを含む名前でも壊れない（常に引用する）。
+        assert!(export_workflow(&detail, "html").is_err());
     }
 
     #[test]

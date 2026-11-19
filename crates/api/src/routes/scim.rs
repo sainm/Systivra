@@ -31,7 +31,10 @@ pub fn router() -> Router<ApiState> {
         .route("/scim/v2/Users", get(list_users).post(create_user))
         .route(
             "/scim/v2/Users/{id}",
-            get(get_user).patch(patch_user).delete(delete_user),
+            get(get_user)
+                .put(put_user)
+                .patch(patch_user)
+                .delete(delete_user),
         )
         .route("/scim/v2/Groups", get(list_groups).post(create_group))
         .route(
@@ -400,6 +403,248 @@ pub(crate) async fn get_user(
     }
 }
 
+/// SCIM の真偽値。IdP によっては文字列で来るので両方受ける。
+fn scim_bool(value: &Value) -> Option<bool> {
+    match value {
+        Value::Bool(flag) => Some(*flag),
+        Value::String(text) if text.eq_ignore_ascii_case("true") => Some(true),
+        Value::String(text) if text.eq_ignore_ascii_case("false") => Some(false),
+        _ => None,
+    }
+}
+
+/// `emails` の先頭を 1 つだけ持つ（この配備のモデルは 1 アドレス）。
+fn scim_email(value: &Value) -> Option<String> {
+    value
+        .as_array()
+        .and_then(|items| items.first())
+        .and_then(|item| item.get("value"))
+        .and_then(Value::as_str)
+        .or_else(|| value.as_str())
+        .map(|text| text.trim().to_owned())
+        .filter(|text| !text.is_empty())
+}
+
+/// 1 つの属性に値を入れる。未知の path は**黙って無視しない**（400 で返す）。
+fn set_user_attr(document: &mut Value, path: &str, value: &Value) -> Result<(), String> {
+    let normalized = path.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "active" => {
+            let flag =
+                scim_bool(value).ok_or_else(|| "active は真偽値で指定してください".to_string())?;
+            document["active"] = json!(flag);
+        }
+        "displayname" | "name.formatted" => {
+            let text = value
+                .as_str()
+                .ok_or_else(|| "displayName は文字列で指定してください".to_string())?;
+            document["displayName"] = json!(text);
+            document["name"]["formatted"] = json!(text);
+        }
+        "emails"
+        | "emails.value"
+        | "emails[type eq \"work\"].value"
+        | "emails[type eq \"primary\"].value" => {
+            document["emails"] = match scim_email(value) {
+                Some(email) => json!([{"value": email, "primary": true}]),
+                None => json!([]),
+            };
+        }
+        "username" | "name.givenname" | "name.familyname" => {
+            // `userName` は認証の識別子なので不変。名前の分割は保持していない。
+            return Err(format!("{path} はこの配備では変更できません"));
+        }
+        other => return Err(format!("unsupported patch path: {other}")),
+    }
+    Ok(())
+}
+
+fn remove_user_attr(document: &mut Value, path: &str) -> Result<(), String> {
+    let normalized = path.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        // 既定値へ戻す（SCIM の remove は「未割当」）。
+        "active" => document["active"] = json!(true),
+        "displayname" | "name.formatted" => {
+            let fallback = document["userName"].as_str().unwrap_or_default().to_owned();
+            document["displayName"] = json!(fallback);
+            document["name"]["formatted"] = json!(fallback);
+        }
+        "emails"
+        | "emails.value"
+        | "emails[type eq \"work\"].value"
+        | "emails[type eq \"primary\"].value" => document["emails"] = json!([]),
+        other => return Err(format!("unsupported patch path: {other}")),
+    }
+    Ok(())
+}
+
+/// RFC 7644 §3.5.2 の PATCH。`add` / `replace` / `remove` を受け、
+/// 未知の path は 400 にする（黙って捨てると IdP 側は成功したと思う）。
+fn apply_user_patch(current: &mut Value, body: &Value) -> Result<(), String> {
+    let operations = body
+        .get("Operations")
+        .or_else(|| body.get("operations"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| "Operations is required".to_string())?;
+    if operations.is_empty() {
+        return Err("Operations is empty".to_string());
+    }
+    for operation in operations {
+        let op = operation
+            .get("op")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let path = operation.get("path").and_then(Value::as_str).unwrap_or("");
+        let value = operation.get("value").unwrap_or(&Value::Null);
+        match op.as_str() {
+            "remove" => {
+                if path.trim().is_empty() {
+                    return Err("remove には path が必要です".to_string());
+                }
+                remove_user_attr(current, path)?;
+            }
+            "add" | "replace" => {
+                if path.trim().is_empty() {
+                    let object = value.as_object().ok_or_else(|| {
+                        "path 無しの値はオブジェクトで指定してください".to_string()
+                    })?;
+                    for (key, item) in object {
+                        // `schemas` / `meta` / `id` は読み取り専用。付いていても無視する。
+                        if key.eq_ignore_ascii_case("schemas")
+                            || key.eq_ignore_ascii_case("meta")
+                            || key.eq_ignore_ascii_case("id")
+                        {
+                            continue;
+                        }
+                        set_user_attr(current, key, item)?;
+                    }
+                } else {
+                    set_user_attr(current, path, value)?;
+                }
+            }
+            other => return Err(format!("unsupported op: {other}")),
+        }
+    }
+    Ok(())
+}
+
+/// 現在値から永続化対象を取り出して書き戻す。
+async fn persist_user_patch(
+    state: &ApiState,
+    trace: &TraceId,
+    id: UserId,
+    patched: &Value,
+) -> Response {
+    let display_name = patched["displayName"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    if display_name.trim().is_empty() {
+        return scim_error(trace, 400, "displayName is empty");
+    }
+    let email = patched["emails"]
+        .as_array()
+        .and_then(|items| items.first())
+        .and_then(|item| item.get("value"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let active = patched["active"].as_bool().unwrap_or(true);
+    match state
+        .app
+        .update_scim_user(id, &display_name, email.as_deref(), active)
+        .await
+    {
+        Ok(true) => match state.app.find_scim_user(id).await {
+            Ok(Some(user)) => {
+                let value = scim_user(&user);
+                let tag = resource_tag(&value);
+                with_etag(Json(value).into_response(), &tag)
+            }
+            _ => scim_error(trace, 404, "user not found"),
+        },
+        Ok(false) => scim_error(trace, 404, "user not found"),
+        Err(e) => {
+            tracing::error!(error = %e, "scim update user failed");
+            scim_error(trace, 500, "user update failed")
+        }
+    }
+}
+
+/// `PUT /Users/{id}`。**完全置換**。省略された属性は既定値へ戻す
+/// （`displayName` は `userName`、`emails` は空、`active` は true）。
+pub(crate) async fn put_user(
+    State(state): State<ApiState>,
+    Extension(trace): Extension<TraceId>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    let Some(id) = user_id(&id) else {
+        return scim_error(&trace, 404, "user not found");
+    };
+    let current = match state.app.find_scim_user(id).await {
+        Ok(Some(user)) => user,
+        Ok(None) => return scim_error(&trace, 404, "user not found"),
+        Err(e) => {
+            tracing::error!(error = %e, "scim get user failed");
+            return scim_error(&trace, 500, "user lookup failed");
+        }
+    };
+    if !if_match_ok(&headers, &resource_tag(&scim_user(&current))) {
+        return scim_error(&trace, 412, "If-Match does not match");
+    }
+    let Some(user_name) = body
+        .get("userName")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return scim_error(&trace, 400, "userName is required");
+    };
+    if user_name != current.login_id {
+        return scim_error(
+            &trace,
+            400,
+            "userName is immutable (認証の識別子は変更できません)",
+        );
+    }
+    let display_name = body
+        .get("displayName")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            body.get("name")
+                .and_then(|name| name.get("formatted"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or(user_name);
+    let email = body.get("emails").and_then(scim_email);
+    let active = body.get("active").and_then(scim_bool).unwrap_or(true);
+    match state
+        .app
+        .update_scim_user(id, display_name, email.as_deref(), active)
+        .await
+    {
+        Ok(true) => match state.app.find_scim_user(id).await {
+            Ok(Some(user)) => {
+                let value = scim_user(&user);
+                let tag = resource_tag(&value);
+                with_etag(Json(value).into_response(), &tag)
+            }
+            _ => scim_error(&trace, 404, "user not found"),
+        },
+        Ok(false) => scim_error(&trace, 404, "user not found"),
+        Err(e) => {
+            tracing::error!(error = %e, "scim put user failed");
+            scim_error(&trace, 500, "user update failed")
+        }
+    }
+}
+
 pub(crate) async fn patch_user(
     State(state): State<ApiState>,
     Extension(trace): Extension<TraceId>,
@@ -421,38 +666,11 @@ pub(crate) async fn patch_user(
     if !if_match_ok(&headers, &resource_tag(&scim_user(&current))) {
         return scim_error(&trace, 412, "If-Match does not match");
     }
-    let Some(active) = body
-        .get("Operations")
-        .and_then(Value::as_array)
-        .and_then(|operations| {
-            operations.iter().find_map(|operation| {
-                let path = operation.get("path").and_then(Value::as_str).unwrap_or("");
-                let op = operation.get("op").and_then(Value::as_str).unwrap_or("");
-                if op.eq_ignore_ascii_case("replace") && path.eq_ignore_ascii_case("active") {
-                    operation.get("value").and_then(Value::as_bool)
-                } else {
-                    None
-                }
-            })
-        })
-    else {
-        return scim_error(&trace, 400, "unsupported patch operation");
-    };
-    match state.app.set_user_active(id, active).await {
-        Ok(true) => match state.app.find_scim_user(id).await {
-            Ok(Some(user)) => {
-                let value = scim_user(&user);
-                let tag = resource_tag(&value);
-                with_etag(Json(value).into_response(), &tag)
-            }
-            _ => scim_error(&trace, 404, "user not found"),
-        },
-        Ok(false) => scim_error(&trace, 404, "user not found"),
-        Err(e) => {
-            tracing::error!(error = %e, "scim patch user failed");
-            scim_error(&trace, 500, "user update failed")
-        }
+    let mut patched = scim_user(&current);
+    if let Err(message) = apply_user_patch(&mut patched, &body) {
+        return scim_error(&trace, 400, &message);
     }
+    persist_user_patch(&state, &trace, id, &patched).await
 }
 
 pub(crate) async fn delete_user(

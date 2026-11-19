@@ -4,9 +4,9 @@
 //! 外部 Agent は PAT でプロジェクトを指定し、Gateway が `project_id` を注入する。
 
 use app::Authenticated;
-use axum::extract::{Path, State};
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use axum::extract::{Path, Query, State};
+use axum::http::{header, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use contracts::{
@@ -36,7 +36,10 @@ pub fn router() -> Router<ApiState> {
             post(create_agent_run),
         )
         .route("/api/v1/projects/{pid}/agent-runs", get(list_agent_runs))
-        .route("/api/v1/projects/{pid}/agent-runs/{rid}", get(agent_run))
+        .route(
+            "/api/v1/projects/{pid}/agent-runs/{rid}",
+            get(agent_run).post(cancel_agent_run),
+        )
         .route("/api/v1/projects/{pid}/ai/overview", get(ai_overview))
         .route(
             "/api/v1/projects/{pid}/mcp/servers",
@@ -55,6 +58,10 @@ pub fn router() -> Router<ApiState> {
         .route(
             "/api/v1/projects/{pid}/workflows/{wid}",
             get(workflow_detail),
+        )
+        .route(
+            "/api/v1/projects/{pid}/workflows/{wid}/export",
+            get(export_workflow),
         )
         .route(
             "/api/v1/projects/{pid}/workflows/{wid}/runs",
@@ -188,6 +195,38 @@ pub(crate) async fn agent_run(
     state
         .app
         .agent_run_view(&auth, scope.project, run_id)
+        .await
+        .map(Json)
+        .map_err(|error| ApiError::from_app(error, &trace))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{pid}/agent-runs/{rid}:cancel",
+    params(
+        ("pid" = uuid::Uuid, Path, description = "Project ID"),
+        ("rid" = uuid::Uuid, Path, description = "Agent run ID")
+    ),
+    responses(
+        (status = 200, body = AgentRunView),
+        (status = 404, body = contracts::Problem),
+        (status = 409, body = contracts::Problem)
+    )
+)]
+pub(crate) async fn cancel_agent_run(
+    State(state): State<ApiState>,
+    scope: ProjectScope,
+    Extension(trace): Extension<TraceId>,
+    Extension(auth): Extension<Authenticated>,
+    Path((_pid, rid_cancel)): Path<(String, String)>,
+) -> Result<Json<AgentRunView>, ApiError> {
+    let rid = rid_cancel
+        .strip_suffix(":cancel")
+        .ok_or_else(|| ApiError::new(contracts::ErrorCode::ValidationSchema, &trace))?;
+    let run_id = parse_uuid(rid, &trace)?;
+    state
+        .app
+        .cancel_agent_run(&auth, scope.project, run_id, Some(trace.0.clone()))
         .await
         .map(Json)
         .map_err(|error| ApiError::from_app(error, &trace))
@@ -454,6 +493,55 @@ pub(crate) async fn list_workflows(
         .await
         .map(Json)
         .map_err(|error| ApiError::from_app(error, &trace))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{pid}/workflows/{wid}/export",
+    params(
+        ("pid" = uuid::Uuid, Path, description = "Project ID"),
+        ("wid" = uuid::Uuid, Path, description = "Workflow ID"),
+        ("format" = Option<String>, Query, description = "json | yaml（既定 json）")
+    ),
+    responses(
+        (status = 200, description = "Workflow definition file"),
+        (status = 404, body = contracts::Problem)
+    )
+)]
+/// 定義の書き出し。YAML は**片方向**（取り込みは JSON）。
+pub(crate) async fn export_workflow(
+    State(state): State<ApiState>,
+    scope: ProjectScope,
+    Extension(trace): Extension<TraceId>,
+    Extension(auth): Extension<Authenticated>,
+    Path((_pid, wid)): Path<(String, String)>,
+    Query(query): Query<ExportWorkflowQuery>,
+) -> Result<Response, ApiError> {
+    let workflow_id = parse_uuid(&wid, &trace)?;
+    let detail = state
+        .app
+        .workflow_detail(&auth, scope.project, workflow_id)
+        .await
+        .map_err(|error| ApiError::from_app(error, &trace))?;
+    let format = query.format.as_deref().unwrap_or("json");
+    let (body, content_type, filename) = app::ai::export_workflow(&detail, format)
+        .map_err(|error| ApiError::from_app(error, &trace))?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, content_type.to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        body,
+    )
+        .into_response())
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub(crate) struct ExportWorkflowQuery {
+    pub format: Option<String>,
 }
 
 #[utoipa::path(

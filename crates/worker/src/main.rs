@@ -35,6 +35,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(30);
+    // 0 は「消さない」。既定で過去を消し始めるのは危険なので opt-in。
+    let audit_retention_months: i32 = std::env::var("AUDIT_RETENTION_MONTHS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let audit_partition_ahead: i32 = std::env::var("AUDIT_PARTITION_AHEAD_MONTHS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(12);
+    let mut last_audit_maintenance = std::time::Instant::now()
+        .checked_sub(Duration::from_secs(86_400))
+        .unwrap_or_else(std::time::Instant::now);
     loop {
         tokio::select! {
             _ = ticker.tick() => {
@@ -44,6 +56,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Err(error) => tracing::warn!(error = %error, "session cleanup failed"),
                     }
                     last_session_cleanup = std::time::Instant::now();
+                }
+                if last_audit_maintenance.elapsed() >= Duration::from_secs(86_400) {
+                    match app
+                        .maintain_audit_partitions(audit_retention_months, audit_partition_ahead)
+                        .await
+                    {
+                        Ok(report) => tracing::info!(
+                            %report,
+                            retention_months = audit_retention_months,
+                            "audit partitions maintained"
+                        ),
+                        Err(error) => tracing::warn!(error = %error, "audit partition maintenance failed"),
+                    }
+                    last_audit_maintenance = std::time::Instant::now();
                 }
                 if last_artifact_cleanup.elapsed() >= Duration::from_secs(86_400) {
                     match app.expire_test_artifacts(None, retention_days, trace_retention_days).await {

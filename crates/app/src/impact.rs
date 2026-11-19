@@ -1100,7 +1100,51 @@ impl App {
         } else {
             degraded.push("documents_excluded_by_request".into());
         }
-        degraded.push("tests_not_available".into());
+        // 既存テストとの照合。「テストが無い」と「あるが覆っていない」を分ける。
+        let item_ids: Vec<Uuid> = items.iter().map(|item| item.item_id).collect();
+        let screens: Vec<String> = items
+            .iter()
+            .filter(|item| {
+                item.category.to_ascii_uppercase().contains("SCREEN")
+                    || item.entity_kind.eq_ignore_ascii_case("Screen")
+            })
+            .map(|item| item.label.clone())
+            .collect();
+        let covering = self
+            .store()
+            .cases_covering(tx, project.0, &item_ids, &screens)
+            .await?;
+        let covered: std::collections::BTreeSet<Uuid> = covering
+            .iter()
+            .flat_map(|case| case.covers_impacts.iter().copied())
+            .filter(|id| item_ids.contains(id))
+            .collect();
+        let test_coverage = contracts::ImpactTestCoverage {
+            covering_cases: covering
+                .iter()
+                .map(|case| contracts::ImpactCoveringCase {
+                    case_id: case.id,
+                    code: case.code.clone(),
+                    title: case.title.clone(),
+                    covers_impacts: case.covers_impacts.clone(),
+                    covers_screens: case.covers_screens.clone(),
+                })
+                .collect(),
+            covered_item_ids: covered.iter().copied().collect(),
+            uncovered_item_ids: item_ids
+                .iter()
+                .filter(|id| !covered.contains(*id))
+                .copied()
+                .collect(),
+        };
+        if test_coverage.covering_cases.is_empty() {
+            degraded.push("tests_not_available".into());
+        } else if !test_coverage.uncovered_item_ids.is_empty() {
+            degraded.push(format!(
+                "test_coverage_partial:{}",
+                test_coverage.uncovered_item_ids.len()
+            ));
+        }
         if !unverified.is_empty() {
             degraded.push(format!("unverified_items:{}", unverified.len()));
         }
@@ -1154,6 +1198,7 @@ impl App {
             risk,
             truncated,
             degraded,
+            test_coverage,
             base_revision_id: seeds.base_revision_id,
             head_revision_id: seeds.head_revision_id,
             engine_version: engine_impact::ENGINE_VERSION.into(),

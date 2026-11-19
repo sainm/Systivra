@@ -57,6 +57,23 @@ impl App {
         Ok(changed)
     }
 
+    /// SCIM の PUT / PATCH から来るユーザー属性の更新（`login_id` は不変）。
+    pub async fn update_scim_user(
+        &self,
+        id: UserId,
+        display_name: &str,
+        email: Option<&str>,
+        active: bool,
+    ) -> Result<bool, AuthError> {
+        let mut tx = self.store().begin_unscoped().await?;
+        let updated = self
+            .store()
+            .update_scim_user(&mut tx, id, display_name, email, active)
+            .await?;
+        store::commit(tx).await?;
+        Ok(updated)
+    }
+
     pub async fn list_scim_groups(&self) -> Result<Vec<store::ScimGroupRow>, AuthError> {
         let mut tx = self.store().begin_unscoped().await?;
         let groups = self.store().list_scim_groups(&mut tx).await?;

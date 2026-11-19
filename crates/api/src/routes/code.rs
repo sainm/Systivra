@@ -41,6 +41,7 @@ pub fn router() -> Router<ApiState> {
         .route("/api/v1/projects/{pid}/code/facts", get(list_facts))
         .route("/api/v1/code/analysis-runs/{rid}", get(analysis_run))
         .route("/api/v1/code/files/{fid}/content", get(source_content))
+        .route("/api/v1/code/files/{fid}/text", get(source_text))
 }
 
 #[utoipa::path(
@@ -312,6 +313,36 @@ pub(crate) async fn list_facts(
             query.relation.as_deref().unwrap_or(""),
             query.limit.unwrap_or(100),
         )
+        .await
+        .map_err(|error| ApiError::from_app(error, &trace))?;
+    Ok(Json(response))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/code/files/{fid}/text",
+    params(("fid" = uuid::Uuid, Path, description = "Source file ID")),
+    responses(
+        (status = 200, body = contracts::CodeFileTextResponse),
+        (status = 404, body = contracts::Problem)
+    )
+)]
+/// ソースを行単位で返す（UI の行ハイライト用）。
+pub(crate) async fn source_text(
+    State(state): State<ApiState>,
+    Extension(trace): Extension<TraceId>,
+    Extension(auth): Extension<Authenticated>,
+    Path(fid): Path<String>,
+) -> Result<Json<contracts::CodeFileTextResponse>, ApiError> {
+    let file_id = parse_uuid(&fid, &trace)?;
+    let project = state
+        .app
+        .project_for(auth.user_id, "code_source_file", file_id)
+        .await
+        .map_err(|error| ApiError::from_app(error, &trace))?;
+    let response = state
+        .app
+        .code_source_file_text(&auth, project, file_id)
         .await
         .map_err(|error| ApiError::from_app(error, &trace))?;
     Ok(Json(response))

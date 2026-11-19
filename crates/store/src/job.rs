@@ -1,9 +1,16 @@
 use chrono::{DateTime, Utc};
-use serde_json::Value;
+use serde_json::{json, Value};
 use sqlx::Row;
 use uuid::Uuid;
 
 use crate::pool::{Store, StoreError, Tx};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancelOutcome {
+    Immediate,
+    Flagged,
+    AlreadyCancelled,
+}
 
 #[derive(Debug, Clone)]
 pub struct JobRow {
@@ -307,25 +314,109 @@ impl Store {
         Ok(row.get("id"))
     }
 
+    pub async fn request_job_cancel(
+        &self,
+        tx: &mut Tx<'_>,
+        job_id: Uuid,
+    ) -> Result<Option<CancelOutcome>, StoreError> {
+        let row = sqlx::query("SELECT core.request_job_cancel($1) AS outcome")
+            .bind(job_id)
+            .fetch_one(&mut **tx)
+            .await?;
+        let outcome: String = row.get("outcome");
+        match outcome.as_str() {
+            "IMMEDIATE" => {
+                self.append_event(
+                    tx,
+                    job_id,
+                    "error",
+                    &json!({"status": "CANCELLED", "code": "JOB_CANCELLED", "reason": "cancel_requested"}),
+                )
+                .await?;
+                Ok(Some(CancelOutcome::Immediate))
+            }
+            "FLAGGED" => {
+                self.append_event(
+                    tx,
+                    job_id,
+                    "progress",
+                    &json!({"phase": "CANCELLING", "reason": "cancel_requested"}),
+                )
+                .await?;
+                Ok(Some(CancelOutcome::Flagged))
+            }
+            "ALREADY_CANCELLED" => Ok(Some(CancelOutcome::AlreadyCancelled)),
+            _ => Ok(None),
+        }
+    }
+
+    pub async fn job_cancel_requested(
+        &self,
+        tx: &mut Tx<'_>,
+        job_id: Uuid,
+    ) -> Result<bool, StoreError> {
+        let row = sqlx::query("SELECT status, cancel_requested_at FROM core.job WHERE id = $1")
+            .bind(job_id)
+            .fetch_optional(&mut **tx)
+            .await?;
+        Ok(row
+            .map(|r| {
+                r.get::<Option<DateTime<Utc>>, _>("cancel_requested_at")
+                    .is_some()
+                    || r.get::<String, _>("status") == "CANCELLED"
+            })
+            .unwrap_or(false))
+    }
+
     pub async fn finish_job(
         &self,
         tx: &mut Tx<'_>,
         job_id: Uuid,
         completion: &JobCompletion<'_>,
     ) -> Result<i64, StoreError> {
+        let current = sqlx::query(
+            "SELECT status, cancel_requested_at FROM core.job WHERE id = $1 FOR UPDATE",
+        )
+        .bind(job_id)
+        .fetch_optional(&mut **tx)
+        .await?;
+        let Some(current) = current else {
+            return Ok(0);
+        };
+        if current.get::<String, _>("status") == "CANCELLED" {
+            return self.last_event_id(tx, job_id).await;
+        }
+        let cancelled = current
+            .get::<Option<DateTime<Utc>>, _>("cancel_requested_at")
+            .is_some();
+        let cancel_error = json!([{"code": "JOB_CANCELLED", "message": "cancelled by user"}]);
+        let cancel_data = json!({
+            "status": "CANCELLED",
+            "code": "JOB_CANCELLED",
+            "progress": completion.progress,
+        });
+        let (status, error, event, event_data) = if cancelled {
+            ("CANCELLED", Some(&cancel_error), "error", &cancel_data)
+        } else {
+            (
+                completion.status,
+                completion.error,
+                completion.event,
+                completion.event_data,
+            )
+        };
         sqlx::query(
             "UPDATE core.job
                 SET status = $2, finished_at = now(), error = $3, progress = $4
               WHERE id = $1",
         )
         .bind(job_id)
-        .bind(completion.status)
-        .bind(completion.error)
+        .bind(status)
+        .bind(error)
         .bind(completion.progress)
         .execute(&mut **tx)
         .await?;
-        self.append_event(tx, job_id, completion.event, completion.event_data)
-            .await
+        self.append_event(tx, job_id, event, event_data).await
     }
 
     pub async fn events_since(

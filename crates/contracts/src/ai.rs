@@ -277,8 +277,6 @@ pub struct ApprovalView {
     pub decided_at: Option<DateTime<Utc>>,
     /// Workflow の承認ノードが起票した場合の run。MCP の承認は `None`。
     pub workflow_run_id: Option<Uuid>,
-    /// Agent の実行が起票した場合の run。いまは未使用（将来の承認フロー用）。
-    pub run_id: Option<Uuid>,
     /// MCP の許可証として消費された時刻。`status=APPROVED` でも
     /// `consumed_at` があれば**もう使えない**。
     pub consumed_at: Option<DateTime<Utc>>,

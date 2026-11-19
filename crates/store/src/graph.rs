@@ -606,6 +606,37 @@ impl Store {
         Ok(rows.iter().map(entity_row).collect())
     }
 
+    /// 文書 ID から `Document` 実体を引く（RAG のシード用）。
+    ///
+    /// 実体の `natural_key` は **doc_node の id** であって文書 ID ではない
+    /// （`sync_document_nodes` が `properties.document_id` で文書に紐づける）。
+    /// chunk の本文に実体名が現れるとは限らない（Section 名と chunk 本文は
+    /// 一致しない）ので、名前一致ではなくこの構造的な対応を使う。
+    pub async fn graph_document_entities(
+        &self,
+        tx: &mut Tx<'_>,
+        project_id: Uuid,
+        document_ids: &[Uuid],
+    ) -> Result<Vec<GraphEntityRow>, StoreError> {
+        if document_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let keys: Vec<String> = document_ids.iter().map(|id| id.to_string()).collect();
+        let rows = sqlx::query(
+            "SELECT id, entity_type, natural_key, name, qualified_name, revision, resolution,
+                    properties, projection_seq
+               FROM graph_meta.entity
+              WHERE project_id = $1 AND deleted_at IS NULL
+                AND entity_type = 'Document'
+                AND properties->>'document_id' = ANY($2)",
+        )
+        .bind(project_id)
+        .bind(&keys)
+        .fetch_all(&mut **tx)
+        .await?;
+        Ok(rows.iter().map(entity_row).collect())
+    }
+
     pub async fn graph_entity(
         &self,
         tx: &mut Tx<'_>,
@@ -1318,6 +1349,174 @@ impl Store {
         }))
     }
 
+    /// 編集中の DRAFT 版（あれば）。
+    pub async fn ontology_draft(
+        &self,
+        tx: &mut Tx<'_>,
+    ) -> Result<Option<(Uuid, String)>, StoreError> {
+        let row = sqlx::query(
+            "SELECT id, version FROM graph_meta.ontology_version
+              WHERE status = 'DRAFT'
+              ORDER BY version DESC
+              LIMIT 1",
+        )
+        .fetch_optional(&mut **tx)
+        .await?;
+        Ok(row.map(|row| (row.get("id"), row.get("version"))))
+    }
+
+    /// 公開版を複製して DRAFT を作る。既に DRAFT があればそれを返す
+    /// （編集中の版を黙って作り直すと、作業中の変更が消える）。
+    pub async fn create_ontology_draft(
+        &self,
+        tx: &mut Tx<'_>,
+        version: &str,
+    ) -> Result<(Uuid, String), StoreError> {
+        if let Some(existing) = self.ontology_draft(tx).await? {
+            return Ok(existing);
+        }
+        let source: Option<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM graph_meta.ontology_version
+              WHERE status = 'PUBLISHED'
+              ORDER BY published_at DESC NULLS LAST
+              LIMIT 1",
+        )
+        .fetch_optional(&mut **tx)
+        .await?;
+        let row = sqlx::query(
+            "INSERT INTO graph_meta.ontology_version (version, status)
+             VALUES ($1, 'DRAFT')
+             RETURNING id",
+        )
+        .bind(version)
+        .fetch_one(&mut **tx)
+        .await?;
+        let target: Uuid = row.get("id");
+        if let Some(source) = source {
+            sqlx::query(
+                "INSERT INTO graph_meta.entity_type
+                   (ontology_version_id, name, display_name_ja, parent_type, is_abstract,
+                    properties_schema)
+                 SELECT $2, name, display_name_ja, parent_type, is_abstract, properties_schema
+                   FROM graph_meta.entity_type WHERE ontology_version_id = $1",
+            )
+            .bind(source)
+            .bind(target)
+            .execute(&mut **tx)
+            .await?;
+            sqlx::query(
+                "INSERT INTO graph_meta.relation_type
+                   (ontology_version_id, name, display_name_ja, source_types, target_types,
+                    cardinality, is_transitive, properties_schema)
+                 SELECT $2, name, display_name_ja, source_types, target_types, cardinality,
+                        is_transitive, properties_schema
+                   FROM graph_meta.relation_type WHERE ontology_version_id = $1",
+            )
+            .bind(source)
+            .bind(target)
+            .execute(&mut **tx)
+            .await?;
+        }
+        Ok((target, version.to_owned()))
+    }
+
+    /// 指定バージョンの型一覧。
+    pub async fn ontology_types(
+        &self,
+        tx: &mut Tx<'_>,
+        version_id: Uuid,
+    ) -> Result<(serde_json::Value, serde_json::Value), StoreError> {
+        let row = sqlx::query(
+            "SELECT COALESCE((SELECT json_agg(json_build_object(
+                       'name', t.name, 'display_name_ja', t.display_name_ja,
+                       'parent_type', t.parent_type, 'is_abstract', t.is_abstract,
+                       'properties_schema', t.properties_schema) ORDER BY t.name)
+                       FROM graph_meta.entity_type t WHERE t.ontology_version_id = $1), '[]') AS entity_types,
+                    COALESCE((SELECT json_agg(json_build_object(
+                       'name', r.name, 'display_name_ja', r.display_name_ja,
+                       'source_types', r.source_types, 'target_types', r.target_types,
+                       'cardinality', r.cardinality, 'is_transitive', r.is_transitive)
+                       ORDER BY r.name)
+                       FROM graph_meta.relation_type r WHERE r.ontology_version_id = $1), '[]') AS relation_types",
+        )
+        .bind(version_id)
+        .fetch_one(&mut **tx)
+        .await?;
+        Ok((row.get("entity_types"), row.get("relation_types")))
+    }
+
+    /// DRAFT の型を追加 / 更新する（name が同じなら上書き）。
+    pub async fn upsert_ontology_entity_type(
+        &self,
+        tx: &mut Tx<'_>,
+        version_id: Uuid,
+        entity_type: &crate::graph::OntologyEntityTypeDraft,
+    ) -> Result<(), StoreError> {
+        sqlx::query(
+            "INSERT INTO graph_meta.entity_type
+               (ontology_version_id, name, display_name_ja, parent_type, is_abstract,
+                properties_schema)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT (ontology_version_id, name)
+             DO UPDATE SET display_name_ja = EXCLUDED.display_name_ja,
+                           parent_type = EXCLUDED.parent_type,
+                           is_abstract = EXCLUDED.is_abstract,
+                           properties_schema = EXCLUDED.properties_schema",
+        )
+        .bind(version_id)
+        .bind(&entity_type.name)
+        .bind(&entity_type.display_name_ja)
+        .bind(&entity_type.parent_type)
+        .bind(entity_type.is_abstract)
+        .bind(&entity_type.properties_schema)
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete_ontology_entity_type(
+        &self,
+        tx: &mut Tx<'_>,
+        version_id: Uuid,
+        name: &str,
+    ) -> Result<bool, StoreError> {
+        let result = sqlx::query(
+            "DELETE FROM graph_meta.entity_type
+              WHERE ontology_version_id = $1 AND name = $2",
+        )
+        .bind(version_id)
+        .bind(name)
+        .execute(&mut **tx)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// DRAFT を公開する。他の PUBLISHED は DEPRECATED に落とす。
+    pub async fn promote_ontology_draft(
+        &self,
+        tx: &mut Tx<'_>,
+        version_id: Uuid,
+        user_id: Uuid,
+    ) -> Result<(), StoreError> {
+        sqlx::query(
+            "UPDATE graph_meta.ontology_version SET status = 'DEPRECATED'
+              WHERE status = 'PUBLISHED' AND id <> $1",
+        )
+        .bind(version_id)
+        .execute(&mut **tx)
+        .await?;
+        sqlx::query(
+            "UPDATE graph_meta.ontology_version
+                SET status = 'PUBLISHED', published_at = now(), published_by = $2
+              WHERE id = $1",
+        )
+        .bind(version_id)
+        .bind(user_id)
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
     pub async fn publish_ontology(
         &self,
         tx: &mut Tx<'_>,
@@ -1487,4 +1686,14 @@ impl Store {
         .await?;
         Ok(result.rows_affected())
     }
+}
+
+/// DRAFT へ書き込む型。契約（`contracts::OntologyEntityType`）と同じ形。
+#[derive(Debug, Clone)]
+pub struct OntologyEntityTypeDraft {
+    pub name: String,
+    pub display_name_ja: String,
+    pub parent_type: Option<String>,
+    pub is_abstract: bool,
+    pub properties_schema: serde_json::Value,
 }

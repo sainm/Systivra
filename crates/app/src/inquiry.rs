@@ -487,6 +487,92 @@ impl App {
                     reason,
                 ));
             }
+            // RAG 併用（設計: detail/08 §2.3 の「RAG top20 + entity_search」）。
+            //
+            // 実体名が chunk 本文に現れるとは限らない（Section 名と本文は一致しない）ので、
+            // **chunk → document_id → Document 実体**という構造的な対応で候補にする。
+            //
+            // 取得は語彙検索を使う。ローカル埋め込みは hashed bag-of-words で、
+            // 任意の質問に対して top-k のスコアがほぼ一定（実測 0.016）になり、
+            // 順位付けの信号にならないため（`detail/08` の RRF は本来そちらを前提にしている）。
+            // **既定では無効。** 今のローカル埋め込み / 語彙検索では汎用語（「画面」など）だけで
+            // 候補が立ち、無意味な質問でも `NOT_FOUND_SEED` に到達しなくなる。
+            // 「勝手に進む」のが本機能で最も危険な失敗（detail/08 §2.2）なので、
+            // 実埋め込みを入れるまで `SEED_RAG=1` を明示したときだけ動かす。
+            let rag_enabled = std::env::var("SEED_RAG").ok().as_deref() == Some("1");
+            if rag_enabled && scored.len() < 5 {
+                let seeded: std::collections::HashSet<Uuid> =
+                    scored.iter().map(|(id, ..)| *id).collect();
+                let mut rtx = self.store().begin_scoped(project).await?;
+                let tsquery = engine_rag::tsquery(&question);
+                let fallback: Result<(Vec<store::GraphEntityRow>, usize), store::StoreError> =
+                    async {
+                        if tsquery.is_empty() {
+                            return Ok((Vec::new(), 0));
+                        }
+                        let hits = self
+                            .store()
+                            .search_lexical(
+                                &mut rtx,
+                                project.0,
+                                &tsquery,
+                                &store::SearchFilter::default(),
+                                20,
+                            )
+                            .await?;
+                        let mut document_ids: Vec<Uuid> = Vec::new();
+                        for hit in &hits {
+                            if !document_ids.contains(&hit.document_id) {
+                                document_ids.push(hit.document_id);
+                            }
+                        }
+                        let entities = self
+                            .store()
+                            .graph_document_entities(&mut rtx, project.0, &document_ids)
+                            .await?;
+                        Ok((entities, document_ids.len()))
+                    }
+                    .await;
+                store::commit(rtx).await?;
+                let entities = match fallback {
+                    Ok((entities, documents)) => {
+                        if entities.is_empty() && documents > 0 {
+                            // chunk は取れたが文書実体が無い = 投影が古い。
+                            // 静かに空にすると「RAG が効いていない」ことに気付けない。
+                            tracing::warn!(
+                                documents,
+                                "RAG のヒットに対応する Document 実体が無い（投影の更新が必要）"
+                            );
+                        }
+                        entities
+                    }
+                    Err(error) => {
+                        tracing::warn!(error = %error, "RAG seed fallback failed");
+                        Vec::new()
+                    }
+                };
+                for entity in entities {
+                    if entity.name.chars().count() < 2 {
+                        continue;
+                    }
+                    if let Some(existing) = scored.iter_mut().find(|(id, ..)| *id == entity.id) {
+                        // 名前一致と RAG の両方で出た候補は少し上げる（上限 0.95）。
+                        existing.3 = (existing.3 + 0.05).min(0.95);
+                        existing.4 = format!("{}／関連文書にも出現", existing.4);
+                        continue;
+                    }
+                    if seeded.contains(&entity.id) {
+                        continue;
+                    }
+                    scored.push((
+                        entity.id,
+                        entity.natural_key.clone(),
+                        entity.name.clone(),
+                        0.55,
+                        "質問の語を含む関連文書（語彙検索）".to_string(),
+                    ));
+                }
+            }
             scored.sort_by(|a, b| {
                 b.3.partial_cmp(&a.3)
                     .unwrap_or(std::cmp::Ordering::Equal)
@@ -1035,6 +1121,7 @@ impl App {
                 plan_id: None,
                 name: request.name,
                 max_drafts: request.max_drafts,
+                rule_ids: None,
                 base_path: None,
             },
             trace,

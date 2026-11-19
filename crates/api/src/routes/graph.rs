@@ -8,8 +8,8 @@ use contracts::{
     ErrorCode, GraphEntityQuery, GraphEntitySearchResponse, GraphNeighborsQuery,
     GraphNeighborsResponse, GraphPathQuery, GraphPathResponse, GraphRebuildAbortResponse,
     GraphRebuildResponse, GraphStatsResponse, GraphSubgraphQuery, GraphSubgraphResponse,
-    GraphTraceabilityQuery, OntologyResponse, PublishOntologyRequest, PublishOntologyResponse,
-    TraceabilityResponse,
+    GraphTraceabilityQuery, OntologyEntityType, OntologyResponse, PublishOntologyRequest,
+    PublishOntologyResponse, TraceabilityResponse,
 };
 use uuid::Uuid;
 
@@ -21,6 +21,22 @@ use crate::ApiState;
 pub fn router() -> Router<ApiState> {
     Router::new()
         .route("/api/v1/projects/{pid}/graph/ontology", get(ontology))
+        .route(
+            "/api/v1/projects/{pid}/graph/ontology/drafts",
+            post(create_ontology_draft),
+        )
+        .route(
+            "/api/v1/projects/{pid}/graph/ontology/draft",
+            get(ontology_draft),
+        )
+        .route(
+            "/api/v1/projects/{pid}/graph/ontology/entity-types",
+            axum::routing::put(upsert_entity_type),
+        )
+        .route(
+            "/api/v1/projects/{pid}/graph/ontology/entity-types/{name}",
+            axum::routing::delete(delete_entity_type),
+        )
         .route(
             "/api/v1/projects/{pid}/graph/ontology/publish",
             post(publish_ontology),
@@ -66,6 +82,109 @@ pub(crate) async fn ontology(
 
 #[utoipa::path(
     post,
+    path = "/api/v1/projects/{pid}/graph/ontology/drafts",
+    params(("pid" = uuid::Uuid, Path, description = "Project ID")),
+    responses(
+        (status = 200, body = OntologyResponse),
+        (status = 403, body = contracts::Problem)
+    )
+)]
+/// 編集用の DRAFT を作る（既にあればそれを返す）。公開版は変わらない。
+pub(crate) async fn create_ontology_draft(
+    State(state): State<ApiState>,
+    scope: ProjectScope,
+    Extension(trace): Extension<TraceId>,
+    Extension(auth): Extension<Authenticated>,
+) -> Result<Json<OntologyResponse>, ApiError> {
+    let response = state
+        .app
+        .ensure_ontology_draft(&auth, scope.project)
+        .await
+        .map_err(|error| ApiError::from_app(error, &trace))?;
+    Ok(Json(response))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{pid}/graph/ontology/draft",
+    params(("pid" = uuid::Uuid, Path, description = "Project ID")),
+    responses(
+        (status = 200, body = OntologyResponse),
+        (status = 404, body = contracts::Problem)
+    )
+)]
+/// 編集中の DRAFT を読む。
+pub(crate) async fn ontology_draft(
+    State(state): State<ApiState>,
+    scope: ProjectScope,
+    Extension(trace): Extension<TraceId>,
+    Extension(auth): Extension<Authenticated>,
+) -> Result<Json<OntologyResponse>, ApiError> {
+    let response = state
+        .app
+        .ontology_draft(&auth, scope.project)
+        .await
+        .map_err(|error| ApiError::from_app(error, &trace))?;
+    Ok(Json(response))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/v1/projects/{pid}/graph/ontology/entity-types",
+    params(("pid" = uuid::Uuid, Path, description = "Project ID")),
+    request_body = OntologyEntityType,
+    responses(
+        (status = 200, body = OntologyResponse),
+        (status = 400, body = contracts::Problem)
+    )
+)]
+/// DRAFT に型を追加 / 更新する。
+pub(crate) async fn upsert_entity_type(
+    State(state): State<ApiState>,
+    scope: ProjectScope,
+    Extension(trace): Extension<TraceId>,
+    Extension(auth): Extension<Authenticated>,
+    Json(entity_type): Json<OntologyEntityType>,
+) -> Result<Json<OntologyResponse>, ApiError> {
+    let response = state
+        .app
+        .upsert_ontology_entity_type(&auth, scope.project, entity_type)
+        .await
+        .map_err(|error| ApiError::from_app(error, &trace))?;
+    Ok(Json(response))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/projects/{pid}/graph/ontology/entity-types/{name}",
+    params(
+        ("pid" = uuid::Uuid, Path, description = "Project ID"),
+        ("name" = String, Path, description = "Entity type name")
+    ),
+    responses(
+        (status = 200, body = OntologyResponse),
+        (status = 400, body = contracts::Problem),
+        (status = 404, body = contracts::Problem)
+    )
+)]
+/// DRAFT から型を削除する（参照されている型は消せない）。
+pub(crate) async fn delete_entity_type(
+    State(state): State<ApiState>,
+    scope: ProjectScope,
+    Extension(trace): Extension<TraceId>,
+    Extension(auth): Extension<Authenticated>,
+    Path((_pid, name)): Path<(String, String)>,
+) -> Result<Json<OntologyResponse>, ApiError> {
+    let response = state
+        .app
+        .delete_ontology_entity_type(&auth, scope.project, &name)
+        .await
+        .map_err(|error| ApiError::from_app(error, &trace))?;
+    Ok(Json(response))
+}
+
+#[utoipa::path(
+    post,
     path = "/api/v1/projects/{pid}/graph/ontology/publish",
     params(("pid" = uuid::Uuid, Path, description = "Project ID")),
     request_body = PublishOntologyRequest,
@@ -83,7 +202,7 @@ pub(crate) async fn publish_ontology(
 ) -> Result<Json<PublishOntologyResponse>, ApiError> {
     let response = state
         .app
-        .graph_publish_ontology(&auth, scope.project, &req.version)
+        .graph_publish_ontology(&auth, scope.project, &req.version, req.draft)
         .await
         .map_err(|e| ApiError::from_app(e, &trace))?;
     Ok(Json(response))

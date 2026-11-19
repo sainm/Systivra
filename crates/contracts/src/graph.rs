@@ -84,6 +84,9 @@ pub struct OntologyRelationType {
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct OntologyResponse {
+    /// 版の ID。DRAFT を編集するときに使う（公開版では従来どおり未設定でもよい）。
+    #[serde(default)]
+    pub id: Option<Uuid>,
     pub version: String,
     pub status: String,
     pub published_at: Option<DateTime<Utc>>,
@@ -95,9 +98,11 @@ pub struct OntologyResponse {
 pub struct GraphStatsResponse {
     pub pg_nodes: i64,
     pub pg_relationships: i64,
-    pub neo4j_nodes: i64,
-    pub neo4j_relationships: i64,
-    pub drift_rate: f64,
+    /// Neo4j に接続できないときは `null`。**0 と混同しない**（0 は「実在する 0 件」）。
+    pub neo4j_nodes: Option<i64>,
+    pub neo4j_relationships: Option<i64>,
+    /// Neo4j 側が読めないときは `null`。1.0 を返すと「100% 漂流」の誤報になる。
+    pub drift_rate: Option<f64>,
     pub last_event_seq: i64,
     pub ontology_version: String,
     pub pending_events: i64,
@@ -109,7 +114,12 @@ pub struct GraphStatsResponse {
 
 #[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub struct PublishOntologyRequest {
+    /// 新しく公開する版の名前。`draft=true` のときは無視される。
     pub version: String,
+    /// `true` なら編集中の DRAFT をそのまま公開する（型編集の成果を反映）。
+    /// 既定は従来どおり「現在の公開版を複製して新しい版を作る」。
+    #[serde(default)]
+    pub draft: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]

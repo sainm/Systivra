@@ -508,6 +508,49 @@
         }
       }
     },
+    "/api/v1/code/files/{fid}/text": {
+      "get": {
+        "tags": [
+          "crate::routes::code"
+        ],
+        "summary": "ソースを行単位で返す（UI の行ハイライト用）。",
+        "operationId": "source_text",
+        "parameters": [
+          {
+            "name": "fid",
+            "in": "path",
+            "description": "Source file ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeFileTextResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/documents/{did}": {
       "get": {
         "tags": [
@@ -1185,6 +1228,58 @@
         }
       }
     },
+    "/api/v1/jobs/{jid}:cancel": {
+      "post": {
+        "tags": [
+          "crate::routes::job"
+        ],
+        "operationId": "cancel",
+        "parameters": [
+          {
+            "name": "jid",
+            "in": "path",
+            "description": "Job ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{pid}/agent-runs": {
       "get": {
         "tags": [
@@ -1257,6 +1352,68 @@
             }
           },
           "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{pid}/agent-runs/{rid}:cancel": {
+      "post": {
+        "tags": [
+          "crate::routes::ai"
+        ],
+        "operationId": "cancel_agent_run",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "rid",
+            "in": "path",
+            "description": "Agent run ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRunView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
             "description": "",
             "content": {
               "application/json": {
@@ -2860,6 +3017,49 @@
         }
       }
     },
+    "/api/v1/projects/{pid}/embedding-models": {
+      "get": {
+        "tags": [
+          "crate::routes::knowledge"
+        ],
+        "summary": "索引ビルドで選べる埋め込みモデル。UI の選択肢はここから作る。",
+        "operationId": "embedding_models",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmbeddingModelListResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{pid}/graph/entities": {
       "get": {
         "tags": [
@@ -3011,6 +3211,207 @@
             }
           },
           "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{pid}/graph/ontology/draft": {
+      "get": {
+        "tags": [
+          "crate::routes::graph"
+        ],
+        "summary": "編集中の DRAFT を読む。",
+        "operationId": "ontology_draft",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OntologyResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{pid}/graph/ontology/drafts": {
+      "post": {
+        "tags": [
+          "crate::routes::graph"
+        ],
+        "summary": "編集用の DRAFT を作る（既にあればそれを返す）。公開版は変わらない。",
+        "operationId": "create_ontology_draft",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OntologyResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{pid}/graph/ontology/entity-types": {
+      "put": {
+        "tags": [
+          "crate::routes::graph"
+        ],
+        "summary": "DRAFT に型を追加 / 更新する。",
+        "operationId": "upsert_entity_type",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OntologyEntityType"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OntologyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{pid}/graph/ontology/entity-types/{name}": {
+      "delete": {
+        "tags": [
+          "crate::routes::graph"
+        ],
+        "summary": "DRAFT から型を削除する（参照されている型は消せない）。",
+        "operationId": "delete_entity_type",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Entity type name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OntologyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
             "description": "",
             "content": {
               "application/json": {
@@ -4770,6 +5171,61 @@
         }
       }
     },
+    "/api/v1/projects/{pid}/workflows/{wid}/export": {
+      "get": {
+        "tags": [
+          "crate::routes::ai"
+        ],
+        "summary": "定義の書き出し。YAML は**片方向**（取り込みは JSON）。",
+        "operationId": "export_workflow",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "wid",
+            "in": "path",
+            "description": "Workflow ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "json | yaml（既定 json）",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workflow definition file"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{pid}/workflows/{wid}/runs": {
       "post": {
         "tags": [
@@ -5217,14 +5673,6 @@
           "payload": {},
           "requested_by": {
             "type": "string"
-          },
-          "run_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid",
-            "description": "Agent の実行が起票した場合の run。いまは未使用（将来の承認フロー用）。"
           },
           "status": {
             "type": "string"
@@ -5757,6 +6205,44 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "CodeFileTextResponse": {
+        "type": "object",
+        "description": "ソースを行単位で返す。UI が該当行へスクロールして強調するために使う。\n\n`line_starts` は**元ファイル基準のバイト位置**。文字列の index ではなく\nバイト位置なので、UI 側は「行頭バイト配列」として扱うこと。",
+        "required": [
+          "encoding",
+          "exact_offsets",
+          "line_starts",
+          "lines",
+          "truncated"
+        ],
+        "properties": {
+          "encoding": {
+            "type": "string"
+          },
+          "exact_offsets": {
+            "type": "boolean",
+            "description": "元ファイルに完全一致で戻せるか（false ならバイト位置を信用しない）。"
+          },
+          "line_starts": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "行数上限で切ったか。"
           }
         }
       },
@@ -6448,6 +6934,17 @@
             ],
             "format": "uuid",
             "description": "既存の計画へ**追記**する場合の計画 ID。指定すると計画を新規作成しない。\n`test.case_generate` はこちらを使う（`test.plan_generate` は新規作成）。"
+          },
+          "rule_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "この計画で対象にする検証ルール。省略時はプロジェクト全体。\n\n指定した場合は**その範囲だけ**から派生する。未知の ID は 400\n（黙って無視すると「対象にしたつもり」の計画ができる）。"
           }
         }
       },
@@ -6759,6 +7256,41 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "EmbeddingModelListResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EmbeddingModelOption"
+            }
+          }
+        }
+      },
+      "EmbeddingModelOption": {
+        "type": "object",
+        "description": "索引ビルドで選べる埋め込みモデル。UI が名前を直書きしないための一覧。",
+        "required": [
+          "name",
+          "revision",
+          "dim"
+        ],
+        "properties": {
+          "dim": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "name": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
           }
         }
       },
@@ -7274,9 +7806,6 @@
         "required": [
           "pg_nodes",
           "pg_relationships",
-          "neo4j_nodes",
-          "neo4j_relationships",
-          "drift_rate",
           "last_event_seq",
           "ontology_version",
           "pending_events",
@@ -7287,8 +7816,12 @@
             "type": "boolean"
           },
           "drift_rate": {
-            "type": "number",
-            "format": "double"
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Neo4j 側が読めないときは `null`。1.0 を返すと「100% 漂流」の誤報になる。"
           },
           "last_build": {
             "oneOf": [
@@ -7319,11 +7852,18 @@
             "format": "int64"
           },
           "neo4j_nodes": {
-            "type": "integer",
-            "format": "int64"
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Neo4j に接続できないときは `null`。**0 と混同しない**（0 は「実在する 0 件」）。"
           },
           "neo4j_relationships": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int64"
           },
           "ontology_version": {
@@ -7476,6 +8016,10 @@
           "stats": {
             "$ref": "#/components/schemas/ImpactStats"
           },
+          "test_coverage": {
+            "$ref": "#/components/schemas/ImpactTestCoverage",
+            "description": "既存テストとの照合。該当が無ければ空（そのとき `degraded` に\n`tests_not_available` が入る）。"
+          },
           "tests_executed": {
             "type": "boolean"
           },
@@ -7589,6 +8133,41 @@
           "total": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "ImpactCoveringCase": {
+        "type": "object",
+        "required": [
+          "case_id",
+          "code",
+          "title",
+          "covers_impacts",
+          "covers_screens"
+        ],
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string"
+          },
+          "covers_impacts": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "covers_screens": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "title": {
+            "type": "string"
           }
         }
       },
@@ -8001,6 +8580,38 @@
           "unresolved": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "ImpactTestCoverage": {
+        "type": "object",
+        "description": "既存テストとの照合結果。\n\n「テストが無い」と「テストはあるが今回の影響を覆っていない」は別物なので、\n両方を返す。`tests_not_available` の一本槍をやめるための器。",
+        "required": [
+          "covering_cases",
+          "covered_item_ids",
+          "uncovered_item_ids"
+        ],
+        "properties": {
+          "covered_item_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "covering_cases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImpactCoveringCase"
+            },
+            "description": "既存ケースのうち、今回の影響項目を 1 つ以上覆っているもの。"
+          },
+          "uncovered_item_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
           }
         }
       },
@@ -9303,6 +9914,14 @@
               "$ref": "#/components/schemas/OntologyEntityType"
             }
           },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "版の ID。DRAFT を編集するときに使う（公開版では従来どおり未設定でもよい）。"
+          },
           "published_at": {
             "type": [
               "string",
@@ -9442,8 +10061,13 @@
           "version"
         ],
         "properties": {
+          "draft": {
+            "type": "boolean",
+            "description": "`true` なら編集中の DRAFT をそのまま公開する（型編集の成果を反映）。\n既定は従来どおり「現在の公開版を複製して新しい版を作る」。"
+          },
           "version": {
-            "type": "string"
+            "type": "string",
+            "description": "新しく公開する版の名前。`draft=true` のときは無視される。"
           }
         }
       },

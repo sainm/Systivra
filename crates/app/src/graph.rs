@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use chrono::Utc;
 use contracts::{
     ErrorCode, GraphEdge, GraphEntity, GraphEntitySearchResponse, GraphNeighbor,
     GraphNeighborsResponse, GraphPathResponse, GraphStatsResponse, GraphSubgraphResponse,
@@ -31,6 +32,7 @@ impl App {
         let relation_types: Vec<OntologyRelationType> = serde_json::from_value(row.relation_types)
             .map_err(|e| AppError::Validation(e.to_string()))?;
         Ok(OntologyResponse {
+            id: None,
             version: row.version,
             status: row.status,
             published_at: row.published_at,
@@ -202,11 +204,19 @@ impl App {
             .await?;
         let ontology_version = self.store().published_ontology_version(&mut tx).await?;
         store::commit(tx).await?;
-        let (neo4j_nodes, neo4j_relationships) = neo4j_counts(project.0).await.unwrap_or((0, 0));
-        let drift_rate = if pg_nodes > 0 {
-            (pg_nodes - neo4j_nodes).unsigned_abs() as f64 / pg_nodes as f64
-        } else {
-            0.0
+        // **未接続と 0 件を区別する。** `unwrap_or((0,0))` だと Neo4j を止めただけで
+        // drift_rate が 1.0 になり「100% 漂流」の誤報になる。
+        let counts = neo4j_counts(project.0).await;
+        let (neo4j_nodes, neo4j_relationships) = match counts {
+            Some((nodes, relationships)) => (Some(nodes), Some(relationships)),
+            None => (None, None),
+        };
+        let drift_rate = match counts {
+            Some((nodes, _)) if pg_nodes > 0 => {
+                Some((pg_nodes - nodes).unsigned_abs() as f64 / pg_nodes as f64)
+            }
+            Some(_) => Some(0.0),
+            None => None,
         };
         Ok(GraphStatsResponse {
             pg_nodes,
@@ -232,11 +242,194 @@ impl App {
         })
     }
 
+    /// 編集中の DRAFT を返す（無ければ作る）。
+    ///
+    /// 型を足すたびに公開版を書き換えると、途中の状態が全員に見えてしまう。
+    /// 編集は DRAFT に閉じ込め、公開は明示的な操作にする。
+    pub async fn ensure_ontology_draft(
+        &self,
+        auth: &Authenticated,
+        project: ProjectId,
+    ) -> Result<contracts::OntologyResponse, AppError> {
+        self.require_ontology_write(auth, project).await?;
+        let mut tx = self.store().begin_scoped(project).await?;
+        let version = format!("draft-{}", Utc::now().format("%Y%m%d%H%M%S"));
+        let (id, label) = self
+            .store()
+            .create_ontology_draft(&mut tx, &version)
+            .await?;
+        let (entity_types, relation_types) = self.store().ontology_types(&mut tx, id).await?;
+        store::commit(tx).await?;
+        Ok(contracts::OntologyResponse {
+            id: Some(id),
+            version: label,
+            status: "DRAFT".into(),
+            published_at: None,
+            entity_types: serde_json::from_value(entity_types)
+                .map_err(|error| AppError::Validation(error.to_string()))?,
+            relation_types: serde_json::from_value(relation_types)
+                .map_err(|error| AppError::Validation(error.to_string()))?,
+        })
+    }
+
+    /// 編集中の DRAFT を読む（編集用。公開版とは別）。
+    pub async fn ontology_draft(
+        &self,
+        auth: &Authenticated,
+        project: ProjectId,
+    ) -> Result<contracts::OntologyResponse, AppError> {
+        self.require_graph_read(auth, project).await?;
+        let mut tx = self.store().begin_scoped(project).await?;
+        let Some((id, label)) = self.store().ontology_draft(&mut tx).await? else {
+            return Err(AppError::NotFound(ErrorCode::NotFound));
+        };
+        let (entity_types, relation_types) = self.store().ontology_types(&mut tx, id).await?;
+        store::commit(tx).await?;
+        Ok(contracts::OntologyResponse {
+            id: Some(id),
+            version: label,
+            status: "DRAFT".into(),
+            published_at: None,
+            entity_types: serde_json::from_value(entity_types)
+                .map_err(|error| AppError::Validation(error.to_string()))?,
+            relation_types: serde_json::from_value(relation_types)
+                .map_err(|error| AppError::Validation(error.to_string()))?,
+        })
+    }
+
+    /// DRAFT に型を追加 / 更新する。
+    pub async fn upsert_ontology_entity_type(
+        &self,
+        auth: &Authenticated,
+        project: ProjectId,
+        entity_type: contracts::OntologyEntityType,
+    ) -> Result<contracts::OntologyResponse, AppError> {
+        self.require_ontology_write(auth, project).await?;
+        let mut tx = self.store().begin_scoped(project).await?;
+        let Some((version_id, _label)) = self.store().ontology_draft(&mut tx).await? else {
+            return Err(AppError::Validation(
+                "編集中の版がありません。先に DRAFT を作ってください".into(),
+            ));
+        };
+        let (entity_json, relation_json) = self.store().ontology_types(&mut tx, version_id).await?;
+        let existing: Vec<contracts::OntologyEntityType> = serde_json::from_value(entity_json)
+            .map_err(|error| AppError::Validation(error.to_string()))?;
+        let relations: Vec<contracts::OntologyRelationType> = serde_json::from_value(relation_json)
+            .map_err(|error| AppError::Validation(error.to_string()))?;
+        validate_entity_type(&existing, &entity_type)?;
+        self.store()
+            .upsert_ontology_entity_type(
+                &mut tx,
+                version_id,
+                &store::OntologyEntityTypeDraft {
+                    name: entity_type.name.clone(),
+                    display_name_ja: entity_type.display_name_ja.clone(),
+                    parent_type: entity_type.parent_type.clone(),
+                    is_abstract: entity_type.is_abstract,
+                    properties_schema: entity_type.properties_schema.clone(),
+                },
+            )
+            .await?;
+        let (entity_json, relation_json) = self.store().ontology_types(&mut tx, version_id).await?;
+        store::commit(tx).await?;
+        let _ = relations;
+        Ok(contracts::OntologyResponse {
+            id: Some(version_id),
+            version: _label,
+            status: "DRAFT".into(),
+            published_at: None,
+            entity_types: serde_json::from_value(entity_json)
+                .map_err(|error| AppError::Validation(error.to_string()))?,
+            relation_types: serde_json::from_value(relation_json)
+                .map_err(|error| AppError::Validation(error.to_string()))?,
+        })
+    }
+
+    /// DRAFT から型を削除する。**参照されている型は消さない**（壊れた定義を残さない）。
+    pub async fn delete_ontology_entity_type(
+        &self,
+        auth: &Authenticated,
+        project: ProjectId,
+        name: &str,
+    ) -> Result<contracts::OntologyResponse, AppError> {
+        self.require_ontology_write(auth, project).await?;
+        let mut tx = self.store().begin_scoped(project).await?;
+        let Some((version_id, label)) = self.store().ontology_draft(&mut tx).await? else {
+            return Err(AppError::Validation(
+                "編集中の版がありません。先に DRAFT を作ってください".into(),
+            ));
+        };
+        let (entity_json, relation_json) = self.store().ontology_types(&mut tx, version_id).await?;
+        let existing: Vec<contracts::OntologyEntityType> = serde_json::from_value(entity_json)
+            .map_err(|error| AppError::Validation(error.to_string()))?;
+        let relations: Vec<contracts::OntologyRelationType> = serde_json::from_value(relation_json)
+            .map_err(|error| AppError::Validation(error.to_string()))?;
+        if !existing.iter().any(|item| item.name == name) {
+            return Err(AppError::NotFound(ErrorCode::NotFound));
+        }
+        let child: Vec<&str> = existing
+            .iter()
+            .filter(|item| item.parent_type.as_deref() == Some(name))
+            .map(|item| item.name.as_str())
+            .collect();
+        if !child.is_empty() {
+            return Err(AppError::Validation(format!(
+                "子型があるため削除できません: {}",
+                child.join(", ")
+            )));
+        }
+        let used: Vec<&str> = relations
+            .iter()
+            .filter(|relation| {
+                relation.source_types.iter().any(|item| item == name)
+                    || relation.target_types.iter().any(|item| item == name)
+            })
+            .map(|relation| relation.name.as_str())
+            .collect();
+        if !used.is_empty() {
+            return Err(AppError::Validation(format!(
+                "関係型が参照しているため削除できません: {}",
+                used.join(", ")
+            )));
+        }
+        self.store()
+            .delete_ontology_entity_type(&mut tx, version_id, name)
+            .await?;
+        let (entity_json, relation_json) = self.store().ontology_types(&mut tx, version_id).await?;
+        store::commit(tx).await?;
+        Ok(contracts::OntologyResponse {
+            id: Some(version_id),
+            version: label,
+            status: "DRAFT".into(),
+            published_at: None,
+            entity_types: serde_json::from_value(entity_json)
+                .map_err(|error| AppError::Validation(error.to_string()))?,
+            relation_types: serde_json::from_value(relation_json)
+                .map_err(|error| AppError::Validation(error.to_string()))?,
+        })
+    }
+
+    async fn require_ontology_write(
+        &self,
+        auth: &Authenticated,
+        project: ProjectId,
+    ) -> Result<(), AppError> {
+        let role = self
+            .role_in(auth.user_id, project)
+            .await?
+            .ok_or(AppError::NotFound(ErrorCode::NotFound))?;
+        if !Permission::OntologyPublish.access_for(role).can_write() {
+            return Err(AppError::Forbidden("ontology:publish がありません".into()));
+        }
+        Ok(())
+    }
+
     pub async fn graph_publish_ontology(
         &self,
         auth: &Authenticated,
         project: ProjectId,
         version: &str,
+        draft: bool,
     ) -> Result<contracts::PublishOntologyResponse, AppError> {
         let role = self
             .role_in(auth.user_id, project)
@@ -245,11 +438,31 @@ impl App {
         if !Permission::OntologyPublish.access_for(role).can_write() {
             return Err(AppError::Forbidden("ontology:publish がありません".into()));
         }
+        let mut tx = self.store().begin_scoped(project).await?;
+        if draft {
+            // 編集した DRAFT をそのまま公開する（型編集の成果を反映）。
+            let Some((version_id, label)) = self.store().ontology_draft(&mut tx).await? else {
+                return Err(AppError::Validation("編集中の版がありません".into()));
+            };
+            let (entity_types, relation_types) =
+                self.store().ontology_types(&mut tx, version_id).await?;
+            self.store()
+                .promote_ontology_draft(&mut tx, version_id, auth.user_id.0)
+                .await?;
+            store::commit(tx).await?;
+            let entity_count = entity_types.as_array().map_or(0, Vec::len) as i64;
+            let relation_count = relation_types.as_array().map_or(0, Vec::len) as i64;
+            return Ok(contracts::PublishOntologyResponse {
+                version: label,
+                status: "PUBLISHED".into(),
+                entity_types: entity_count,
+                relation_types: relation_count,
+            });
+        }
         let version = version.trim();
         if version.is_empty() || version.chars().count() > 40 {
             return Err(AppError::Validation("version は 1〜40 文字です".into()));
         }
-        let mut tx = self.store().begin_scoped(project).await?;
         let (entity_types, relation_types) = self
             .store()
             .publish_ontology(&mut tx, version, auth.user_id.0)
@@ -687,4 +900,125 @@ fn neo4j_projector() -> Option<engine_graph::Neo4jProjector> {
     let password = std::env::var("NEO4J_PASSWORD").unwrap_or_else(|_| "neo4j".to_string());
     let database = std::env::var("NEO4J_DATABASE").unwrap_or_else(|_| "neo4j".to_string());
     engine_graph::Neo4jProjector::new(&uri, &user, &password, &database).ok()
+}
+
+/// 型 1 件の妥当性。**壊れた型を公開するとグラフ全体が読めなくなる**ので、
+/// 名前・親の存在・親子の循環・スキーマの形をここで止める。
+fn validate_entity_type(
+    existing: &[contracts::OntologyEntityType],
+    entity_type: &contracts::OntologyEntityType,
+) -> Result<(), AppError> {
+    let name = entity_type.name.trim();
+    if name.is_empty() || name.chars().count() > 64 {
+        return Err(AppError::Validation("name は 1〜64 文字です".into()));
+    }
+    let mut chars = name.chars();
+    let first = chars.next().unwrap_or('a');
+    if !first.is_ascii_uppercase() {
+        return Err(AppError::Validation(
+            "name は大文字で始めてください（例: Screen）".into(),
+        ));
+    }
+    if !chars.all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err(AppError::Validation(
+            "name は英数字と _ だけにしてください".into(),
+        ));
+    }
+    let display = entity_type.display_name_ja.trim();
+    if display.is_empty() || display.chars().count() > 80 {
+        return Err(AppError::Validation(
+            "display_name_ja は 1〜80 文字です".into(),
+        ));
+    }
+    if !entity_type.properties_schema.is_object() {
+        return Err(AppError::Validation(
+            "properties_schema はオブジェクトで指定してください".into(),
+        ));
+    }
+    if let Some(parent) = &entity_type.parent_type {
+        if parent == name {
+            return Err(AppError::Validation("自分自身を親にはできません".into()));
+        }
+        if !existing.iter().any(|item| &item.name == parent) {
+            return Err(AppError::Validation(format!("親型がありません: {parent}")));
+        }
+        // 親をたどって循環していないか（既存 + 今回の変更を反映した鎖で見る）。
+        let mut current = parent.clone();
+        let mut guard = 0;
+        while let Some(next) = existing
+            .iter()
+            .find(|item| item.name == current && item.name != name)
+            .and_then(|item| item.parent_type.clone())
+        {
+            if next == name {
+                return Err(AppError::Validation(format!(
+                    "親子が循環します: {name} → {parent} → … → {name}"
+                )));
+            }
+            current = next;
+            guard += 1;
+            if guard > 64 {
+                return Err(AppError::Validation("親型の階層が深すぎます".into()));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod ontology_tests {
+    use super::*;
+    use contracts::OntologyEntityType;
+
+    fn ty(name: &str, parent: Option<&str>) -> OntologyEntityType {
+        OntologyEntityType {
+            name: name.into(),
+            display_name_ja: format!("{name} の表示名"),
+            parent_type: parent.map(str::to_owned),
+            is_abstract: false,
+            properties_schema: serde_json::json!({}),
+        }
+    }
+
+    #[test]
+    fn accepts_new_type_with_existing_parent() {
+        let existing = vec![ty("Artifact", None), ty("Screen", Some("Artifact"))];
+        assert!(validate_entity_type(&existing, &ty("Dialog", Some("Screen"))).is_ok());
+    }
+
+    #[test]
+    fn rejects_missing_parent() {
+        // 親が無いと階層が宙に浮く。公開後に気付くのが一番高くつく。
+        let existing = vec![ty("Artifact", None)];
+        let error = validate_entity_type(&existing, &ty("Dialog", Some("Ghost")))
+            .expect_err("未知の親は弾く");
+        assert!(format!("{error:?}").contains("親型がありません"));
+    }
+
+    #[test]
+    fn rejects_parent_cycle() {
+        let existing = vec![ty("A", None), ty("B", Some("A")), ty("C", Some("B"))];
+        // C の親を A にすると A → … の鎖が C に戻る。
+        let error = validate_entity_type(&existing, &ty("A", Some("C"))).expect_err("循環は弾く");
+        assert!(format!("{error:?}").contains("循環"));
+    }
+
+    #[test]
+    fn rejects_bad_names_and_schema() {
+        let existing = vec![ty("Artifact", None)];
+        assert!(validate_entity_type(&existing, &ty("screen", None)).is_err());
+        assert!(validate_entity_type(&existing, &ty("Screen-Type", None)).is_err());
+        let mut broken = ty("Screen", None);
+        broken.properties_schema = serde_json::json!([]);
+        assert!(validate_entity_type(&existing, &broken).is_err());
+        let mut empty = ty("Screen", None);
+        empty.display_name_ja = "  ".into();
+        assert!(validate_entity_type(&existing, &empty).is_err());
+    }
+
+    #[test]
+    fn rejects_self_parent() {
+        let existing = vec![ty("Artifact", None)];
+        assert!(validate_entity_type(&existing, &ty("Artifact", Some("Artifact"))).is_err());
+    }
 }

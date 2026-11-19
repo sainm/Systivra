@@ -3,7 +3,8 @@ use axum::extract::{Path, State};
 use axum::routing::get;
 use axum::{Extension, Json, Router};
 use contracts::{
-    ChunkResponse, ErrorCode, EvidenceResponse, RetokenizeResponse, SearchRequest, SearchResponse,
+    ChunkResponse, EmbeddingModelListResponse, ErrorCode, EvidenceResponse, RetokenizeResponse,
+    SearchRequest, SearchResponse,
 };
 use domain::{ChunkId, EvidenceId};
 
@@ -22,8 +23,36 @@ pub fn router() -> Router<ApiState> {
             "/api/v1/projects/{pid}/knowledge/retokenize",
             axum::routing::post(retokenize),
         )
+        .route(
+            "/api/v1/projects/{pid}/embedding-models",
+            get(embedding_models),
+        )
         .route("/api/v1/chunks/{cid}", get(chunk))
         .route("/api/v1/evidence/{eid}", get(evidence))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{pid}/embedding-models",
+    params(("pid" = uuid::Uuid, Path, description = "Project ID")),
+    responses(
+        (status = 200, body = EmbeddingModelListResponse),
+        (status = 403, body = contracts::Problem)
+    )
+)]
+/// 索引ビルドで選べる埋め込みモデル。UI の選択肢はここから作る。
+pub(crate) async fn embedding_models(
+    State(state): State<ApiState>,
+    scope: ProjectScope,
+    Extension(trace): Extension<TraceId>,
+    Extension(auth): Extension<Authenticated>,
+) -> Result<Json<EmbeddingModelListResponse>, ApiError> {
+    let response = state
+        .app
+        .embedding_models(&auth, scope.project)
+        .await
+        .map_err(|e| ApiError::from_app(e, &trace))?;
+    Ok(Json(response))
 }
 
 #[utoipa::path(

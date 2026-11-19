@@ -22,6 +22,7 @@ pub enum ErrorCode {
     NotFoundJob,
     ConflictRevisionSuperseded,
     ConflictAlreadyImported,
+    ConflictJobTerminal,
     CapabilityUnsupported,
     ProviderTimeout,
     ProviderRateLimited,
@@ -50,6 +51,7 @@ impl ErrorCode {
             Self::NotFoundJob => "NOT_FOUND_JOB",
             Self::ConflictRevisionSuperseded => "CONFLICT_REVISION_SUPERSEDED",
             Self::ConflictAlreadyImported => "CONFLICT_ALREADY_IMPORTED",
+            Self::ConflictJobTerminal => "CONFLICT_JOB_TERMINAL",
             Self::CapabilityUnsupported => "CAPABILITY_UNSUPPORTED",
             Self::ProviderTimeout => "PROVIDER_TIMEOUT",
             Self::ProviderRateLimited => "PROVIDER_RATE_LIMITED",
@@ -80,6 +82,7 @@ impl ErrorCode {
             | Self::NotFoundJob => 404,
             Self::ConflictRevisionSuperseded => 409,
             Self::ConflictAlreadyImported => 409,
+            Self::ConflictJobTerminal => 409,
             Self::CapabilityUnsupported => 409,
             Self::JobCancelled => 410,
             Self::BudgetExceeded => 422,
@@ -116,6 +119,7 @@ impl ErrorCode {
             Self::NotFoundJob => "Job not found",
             Self::ConflictRevisionSuperseded => "Conflict",
             Self::ConflictAlreadyImported => "Already imported",
+            Self::ConflictJobTerminal => "Job already finished",
             Self::CapabilityUnsupported => "Capability unsupported",
             Self::ProviderTimeout => "Upstream timeout",
             Self::ProviderRateLimited => "Rate limited",
@@ -150,6 +154,7 @@ mod tests {
         assert_eq!(ErrorCode::ForbiddenProjectScope.status(), 403);
         assert_eq!(ErrorCode::NotFound.status(), 404);
         assert_eq!(ErrorCode::JobCancelled.status(), 410);
+        assert_eq!(ErrorCode::ConflictJobTerminal.status(), 409);
         assert_eq!(ErrorCode::EvidenceQuoteMismatch.status(), 422);
         assert_eq!(ErrorCode::PolicyApprovalRequired.status(), 423);
         assert_eq!(ErrorCode::ProviderRateLimited.status(), 429);

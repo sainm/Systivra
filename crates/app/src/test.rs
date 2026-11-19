@@ -477,8 +477,30 @@ impl App {
             .store()
             .list_validation_rules(&mut tx, project.0)
             .await?;
+        // 計画ごとの対象ルール指定。未知の ID は**黙って落とさない**。
+        // `rule_rows` は後段の Requirement 投影でも使うので消費しない。
+        let wanted: Option<std::collections::BTreeSet<Uuid>> = match &request.rule_ids {
+            Some(ids) if !ids.is_empty() => {
+                let known: std::collections::BTreeSet<Uuid> =
+                    rule_rows.iter().map(|row| row.id).collect();
+                let unknown: Vec<String> = ids
+                    .iter()
+                    .filter(|id| !known.contains(id))
+                    .map(|id| id.to_string())
+                    .collect();
+                if !unknown.is_empty() {
+                    return Err(AppError::Validation(format!(
+                        "未知の rule_id が含まれています: {}",
+                        unknown.join(", ")
+                    )));
+                }
+                Some(ids.iter().copied().collect())
+            }
+            _ => None,
+        };
         let rules: Vec<engine::ExtractedRule> = rule_rows
             .iter()
+            .filter(|row| wanted.as_ref().is_none_or(|set| set.contains(&row.id)))
             .map(|row| engine::ExtractedRule {
                 id: row.id,
                 field_ref: row.field_ref.clone(),
@@ -604,9 +626,19 @@ impl App {
             },
         );
 
+        // 計画のスコープは「実際にケースが付いたルール」に限る。
+        // 全ルールを書くと、草稿上限で落ちたルールまで対象に見え、
+        // 被覆率が実態より低く出る（原因が見えなくなる）。
+        let covered_rules: Vec<Uuid> = {
+            let mut set = std::collections::BTreeSet::new();
+            for case in &derivation.cases {
+                set.extend(case.covers_rules.iter().copied());
+            }
+            set.into_iter().collect()
+        };
         let scope = TestPlanScope {
             impact_id: request.impact_id,
-            rule_ids: rules.iter().map(|r| r.id).collect(),
+            rule_ids: covered_rules,
             impact_item_ids: impact_items.iter().map(|i| i.id).collect(),
             not_covered: derivation.not_covered.clone(),
         };

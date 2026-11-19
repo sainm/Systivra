@@ -93,7 +93,10 @@ fn repeat_fullwidth(n: u32) -> String {
 }
 
 /// ルール 1 件 → (ラベル, 種別, 値) の組。
-fn data_for(rule: &ExtractedRule) -> Vec<(&'static str, &'static str, String)> {
+/// 1 ルールから作れる (ラベル, 種別, 値) の並び。
+type RuleSamples = Vec<(&'static str, &'static str, String)>;
+
+fn data_for(rule: &ExtractedRule) -> RuleSamples {
     if let Some(rest) = rule.condition.strip_prefix("max=") {
         if let Ok(max) = rest.parse::<u32>() {
             return vec![
@@ -260,6 +263,12 @@ pub fn derive_assets(project: Uuid, input: &DeriveInput) -> Derivation {
     let mut seq = 0usize;
 
     // 1. ルール由来の境界ケース。
+    //
+    // **ルール単位で公平に配る。** 素直に「ルール順に全サンプル」を流すと、
+    // 先頭の 1〜2 ルールが max_drafts を食い尽くし、残りのルールが 1 件も
+    // 残らない（24 画面・14 ルールの実測で被覆が 2 だった原因）。
+    // まず全ルールに 1 件ずつ行き渡らせ、余りを 2 件目、3 件目へ回す。
+    let mut plans: Vec<(&ExtractedRule, RuleSamples)> = Vec::new();
     for rule in &input.rules {
         let samples = data_for(rule);
         if samples.is_empty() {
@@ -267,6 +276,39 @@ pub fn derive_assets(project: Uuid, input: &DeriveInput) -> Derivation {
                 "{}: {} からデータを派生できない（CUSTOM / 未対応条件）",
                 rule.field_ref, rule.condition
             ));
+            continue;
+        }
+        plans.push((rule, samples));
+    }
+
+    let mut take = vec![0usize; plans.len()];
+    let mut planned = 0usize;
+    let mut round = 0usize;
+    while planned < max {
+        let mut progressed = false;
+        for (index, (_, samples)) in plans.iter().enumerate() {
+            if planned >= max {
+                break;
+            }
+            if round < samples.len() {
+                take[index] += 1;
+                planned += 1;
+                progressed = true;
+            }
+        }
+        if !progressed {
+            break;
+        }
+        round += 1;
+    }
+    let total_samples: usize = plans
+        .iter()
+        .map(|(_, samples)| samples.len())
+        .sum::<usize>();
+    truncated += total_samples.saturating_sub(planned);
+
+    for (index, (rule, samples)) in plans.iter().enumerate() {
+        if take[index] == 0 {
             continue;
         }
         seq += 1;
@@ -279,13 +321,9 @@ pub fn derive_assets(project: Uuid, input: &DeriveInput) -> Derivation {
             kind: "BOUNDARY".to_owned(),
             evidence_ids: rule.evidence_ids.clone(),
         });
-        for (label, kind, value) in samples {
-            if cases.len() >= max {
-                truncated += 1;
-                continue;
-            }
+        for (label, kind, value) in samples.iter().take(take[index]) {
             let case_code = format!("{prefix}-TC-{seq:04}-{}", cases.len() + 1);
-            let mut dsl = rule_dsl(&input.base_path, &rule.field_ref, &value, kind == "INVALID");
+            let mut dsl = rule_dsl(&input.base_path, &rule.field_ref, value, *kind == "INVALID");
             dsl.case_code = case_code.clone();
             dsl.title = format!("{} に「{}」を入力した場合", rule.field_ref, label);
             let case_id = id(project, &case_code);
@@ -305,10 +343,10 @@ pub fn derive_assets(project: Uuid, input: &DeriveInput) -> Derivation {
             data_sets.push(DerivedDataSet {
                 id: id(project, &format!("{case_code}:{label}")),
                 case_id,
-                label: label.to_owned(),
-                kind: kind.to_owned(),
+                label: (*label).to_owned(),
+                kind: (*kind).to_owned(),
                 field_ref: rule.field_ref.clone(),
-                value,
+                value: value.clone(),
             });
         }
     }
@@ -384,6 +422,75 @@ mod tests {
 
     fn project() -> Uuid {
         Uuid::from_u128(0xaaaa_bbbb_cccc_dddd_eeee_ffff_0000_1111)
+    }
+
+    fn batch_rules(count: usize) -> Vec<ExtractedRule> {
+        (0..count)
+            .map(|index| ExtractedRule {
+                id: Uuid::from_u128(0x1000 + index as u128),
+                field_ref: format!("form.field{index}"),
+                kind: "LENGTH".to_owned(),
+                condition: "max=20".to_owned(),
+                source: "SPEC".to_owned(),
+                resolution: "RESOLVED".to_owned(),
+                evidence_ids: vec![Uuid::from_u128(0x2000 + index as u128)],
+                condition_key: format!("LENGTH:max=20:{index}"),
+                engine_version: crate::ENGINE_VERSION.to_owned(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn covers_every_rule_before_deepening() {
+        // 14 ルール・20 件。素直に順番へ流すと先頭 6 ルールで上限に達し、
+        // 残り 8 ルールが 1 件も残らない（実測で被覆 2/14 だった原因）。
+        let rules = batch_rules(14);
+        let derivation = derive_assets(
+            project(),
+            &DeriveInput {
+                rules,
+                impact_items: Vec::new(),
+                max_drafts: 20,
+                base_path: "/sample/user/edit".to_owned(),
+                plan_code: "TP".to_owned(),
+            },
+        );
+        assert_eq!(derivation.cases.len(), 20);
+        let covered: std::collections::BTreeSet<_> = derivation
+            .cases
+            .iter()
+            .flat_map(|case| case.covers_rules.clone())
+            .collect();
+        assert_eq!(covered.len(), 14, "全ルールに 1 件以上行き渡るべき");
+    }
+
+    #[test]
+    fn deepens_round_robin_after_first_pass() {
+        // 3 ルール・4 件 → 各 1 件 + 先頭 1 ルールだけ 2 件目。
+        let rules = batch_rules(3);
+        let derivation = derive_assets(
+            project(),
+            &DeriveInput {
+                rules,
+                impact_items: Vec::new(),
+                max_drafts: 4,
+                base_path: "/sample/user/edit".to_owned(),
+                plan_code: "TP".to_owned(),
+            },
+        );
+        assert_eq!(derivation.cases.len(), 4);
+        let counts: Vec<usize> = (0..3)
+            .map(|index| {
+                derivation
+                    .cases
+                    .iter()
+                    .filter(|case| {
+                        case.covers_rules == vec![Uuid::from_u128(0x1000 + index as u128)]
+                    })
+                    .count()
+            })
+            .collect();
+        assert_eq!(counts, vec![2, 1, 1], "1 件ずつ配ってから 2 件目へ回す");
     }
 
     #[test]

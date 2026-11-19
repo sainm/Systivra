@@ -444,6 +444,57 @@ impl Store {
         Ok(row.as_ref().map(code_source_file_row))
     }
 
+    /// 増分解析の逆依存 1 層。**シグネチャが変わった（または消えた）シンボル**を
+    /// 呼んでいる側のファイルを返す（親 revision の `CALLS` 事実を使う）。
+    ///
+    /// 本体だけの変更では呼び出し元を巻き込まない（無駄な再解析を避ける）。
+    /// `cur.id IS NULL` は「消えた」＝呼び出し元が壊れる可能性があるので含める。
+    /// **1 層だけ**広げる（推移的に広げると毎回ほぼ全件になる）。
+    pub async fn reverse_dependency_paths(
+        &self,
+        tx: &mut Tx<'_>,
+        project_id: Uuid,
+        parent_id: Uuid,
+        current_id: Uuid,
+        paths: &[String],
+    ) -> Result<Vec<String>, StoreError> {
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query(
+            "WITH changed_symbols AS (
+               SELECT old.fqn
+                 FROM code.symbol old
+                 JOIN code.source_file f ON f.id = old.file_id
+                 LEFT JOIN code.symbol cur
+                   ON cur.project_id = old.project_id
+                  AND cur.revision_id = $3
+                  AND cur.fqn = old.fqn
+                WHERE f.project_id = $1 AND f.revision_id = $2
+                  AND f.path = ANY($4)
+                  AND (cur.id IS NULL OR cur.signature IS DISTINCT FROM old.signature)
+             )
+             SELECT DISTINCT f.path
+               FROM code.fact fa
+               JOIN code.symbol caller
+                 ON caller.project_id = fa.project_id
+                AND caller.revision_id = fa.revision_id
+                AND caller.fqn = fa.subject_key
+               JOIN code.source_file f ON f.id = caller.file_id
+              WHERE fa.project_id = $1
+                AND fa.revision_id = $2
+                AND fa.relation = 'CALLS'
+                AND fa.object_key IN (SELECT fqn FROM changed_symbols)",
+        )
+        .bind(project_id)
+        .bind(parent_id)
+        .bind(current_id)
+        .bind(paths)
+        .fetch_all(&mut **tx)
+        .await?;
+        Ok(rows.iter().map(|row| row.get("path")).collect())
+    }
+
     pub async fn changed_code_paths(
         &self,
         tx: &mut Tx<'_>,

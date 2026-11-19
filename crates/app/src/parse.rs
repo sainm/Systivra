@@ -253,6 +253,62 @@ impl App {
         Ok(())
     }
 
+    pub async fn finish_parse_cancelled(
+        &self,
+        target: &ParseTarget,
+        page_count: i64,
+        chunk_count: i64,
+    ) -> Result<(), AppError> {
+        let stats = json!({"page_count": page_count, "chunk_count": chunk_count});
+        let mut tx = self.store().begin_scoped(target.project_id).await?;
+        self.store()
+            .update_parse_run(&mut tx, target.parse_run_id.0, "CANCELLED", &stats, None)
+            .await?;
+        self.store()
+            .append_audit(
+                &mut tx,
+                &store::AuditDraft {
+                    project_id: Some(target.project_id.0),
+                    actor_type: "SYSTEM".into(),
+                    actor_id: "systivra-worker".into(),
+                    action: "document.parse.cancelled".into(),
+                    target_type: Some("document".into()),
+                    target_id: Some(target.document_id.to_string()),
+                    input_digest: None,
+                    result: "CANCELLED".into(),
+                    detail: json!({
+                        "revision_id": target.revision_id,
+                        "parse_run_id": target.parse_run_id,
+                        "page_count": page_count,
+                        "chunk_count": chunk_count,
+                    }),
+                    trace_id: None,
+                },
+            )
+            .await?;
+        store::commit(tx).await?;
+
+        let progress = json!({
+            "phase": "CANCELLED",
+            "files_done": page_count,
+            "files_total": page_count,
+            "cells_done": 0,
+            "cells_total": 0,
+            "chunks_done": chunk_count,
+            "done": page_count,
+            "total": page_count,
+        });
+        self.finish_job(
+            target.project_id,
+            target.job_id.0,
+            JobStatus::Cancelled,
+            Vec::new(),
+            progress,
+        )
+        .await?;
+        Ok(())
+    }
+
     pub async fn audit_parse_rejected(&self, job: &store::JobRow, message: &str) {
         if let Ok(project) = Self::job_project(job) {
             let _ = self

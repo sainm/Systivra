@@ -29,6 +29,13 @@ pub async fn run(app: &App) -> Result<(), app::AppError> {
     }
     while let Some(job) = app.claim_next_job().await? {
         tracing::info!(job_id = %job.id, kind = %job.kind, "job claimed");
+        if app
+            .job_cancel_requested(ProjectId(job.project_id), job.id)
+            .await?
+        {
+            fail_job(app, &job, "cancelled by user").await;
+            continue;
+        }
         // 処理中も心拍を打つ。これが無いと `WORKER_STALE_SEC` を超える job は
         // 別 worker から「落ちた」と見なされ、同じ job が二重に走る。
         let beat_every = Duration::from_secs((stale as u64 / 3).max(1));
@@ -139,6 +146,15 @@ async fn process(app: &App, job: &app::JobRow) -> Result<(), app::AppError> {
         let page = (index + 1) as i32;
         if page <= start_page {
             continue;
+        }
+        if app
+            .job_cancel_requested(target.project_id, target.job_id.0)
+            .await?
+        {
+            let chunk_count = app::parse::chunk_count(app, &target).await?;
+            return app
+                .finish_parse_cancelled(&target, (page - 1) as i64, chunk_count)
+                .await;
         }
         let nodes = page_nodes(&target, page, text);
         let plans = engine_rag::chunk_page(target.revision_id.0, page, text, chunks_done as i32);
@@ -363,14 +379,15 @@ async fn process_agent_run(app: &App, job: &app::JobRow) -> Result<(), app::AppE
         "agent": run.agent_code,
         "status": run.status,
     });
-    app.finish_job(
-        project,
-        job.id,
-        JobStatus::SucceededWithErrors,
-        errors,
-        progress,
-    )
-    .await?;
+    let job_status = if run.status == "CANCELLED" {
+        JobStatus::Cancelled
+    } else if run.status == "SUCCEEDED" {
+        JobStatus::Succeeded
+    } else {
+        JobStatus::SucceededWithErrors
+    };
+    app.finish_job(project, job.id, job_status, errors, progress)
+        .await?;
     tracing::info!(job_id = %job.id, status = %run.status, "agent run finished");
     Ok(())
 }
@@ -527,6 +544,22 @@ async fn process_index_build(app: &App, job: &app::JobRow) -> Result<(), app::Ap
         .ok_or_else(|| app::AppError::Validation("revision がありません".into()))?;
 
     loop {
+        if app.job_cancel_requested(project, job.id).await? {
+            let _ = app
+                .fail_index_build(project, build_id, "cancelled by user")
+                .await;
+            let progress = json!({
+                "phase": "CANCELLED",
+                "files_done": 0,
+                "files_total": 0,
+                "cells_done": 0,
+                "cells_total": 0,
+                "chunks_done": 0,
+            });
+            return app
+                .finish_job(project, job.id, JobStatus::Cancelled, Vec::new(), progress)
+                .await;
+        }
         let (processed, count) = app
             .build_index_batch(project, build_id, model_id, revision, 200)
             .await?;
@@ -628,6 +661,23 @@ async fn process_bulk(app: &App, job: &app::JobRow) -> Result<(), app::AppError>
     for (line_number, line) in lines {
         if (line_number as i64) <= start_line {
             continue;
+        }
+        if app.job_cancel_requested(project, job.id).await? {
+            let progress = json!({
+                "phase": "CANCELLED",
+                "files_done": done,
+                "files_total": total,
+                "cells_done": 0,
+                "cells_total": 0,
+                "chunks_done": 0,
+                "done": done,
+                "total": total,
+                "skipped_duplicate": skipped,
+                "files_failed": failed,
+            });
+            return app
+                .finish_job(project, job.id, JobStatus::Cancelled, errors, progress)
+                .await;
         }
         match serde_json::from_str::<ManifestEntry>(line) {
             Ok(entry) => {
@@ -882,6 +932,15 @@ async fn save_office_pages(
         if page.index <= start_page {
             continue;
         }
+        if app
+            .job_cancel_requested(target.project_id, target.job_id.0)
+            .await?
+        {
+            let chunk_count = app::parse::chunk_count(app, target).await?;
+            return app
+                .finish_parse_cancelled(target, (page.index - 1) as i64, chunk_count)
+                .await;
+        }
         chunks_done += page.chunks.len() as i64;
         app.save_parse_page(
             target,
@@ -951,6 +1010,15 @@ async fn process_xlsx(
     for page in &ingest.pages {
         if page.index <= start_page {
             continue;
+        }
+        if app
+            .job_cancel_requested(target.project_id, target.job_id.0)
+            .await?
+        {
+            let chunk_count = app::parse::chunk_count(app, target).await?;
+            return app
+                .finish_parse_cancelled(target, (page.index - 1) as i64, chunk_count)
+                .await;
         }
         chunks_done += page.chunks.len() as i64;
         app.save_parse_page(
@@ -1058,6 +1126,50 @@ fn page_nodes(target: &ParseTarget, page: i32, text: &str) -> Vec<app::NodeDraft
 }
 
 async fn fail_job(app: &App, job: &app::JobRow, message: &str) {
+    if app
+        .job_cancel_requested(ProjectId(job.project_id), job.id)
+        .await
+        .unwrap_or(false)
+    {
+        if job.kind == "INDEX_BUILD" {
+            if let Some(build_id) = job
+                .input
+                .get("build_id")
+                .and_then(Value::as_str)
+                .and_then(|value| Uuid::parse_str(value).ok())
+            {
+                let _ = app
+                    .fail_index_build(ProjectId(job.project_id), build_id, "cancelled by user")
+                    .await;
+            }
+        }
+        if job.kind == "AGENT_RUN" {
+            if let Some(run_id) = job
+                .input
+                .get("run_id")
+                .and_then(Value::as_str)
+                .and_then(|value| Uuid::parse_str(value).ok())
+            {
+                let _ = app
+                    .cancel_agent_run_from_job(ProjectId(job.project_id), run_id)
+                    .await;
+            }
+        }
+        if let Ok(target) = ParseTarget::from_job(job) {
+            let _ = app.finish_parse_cancelled(&target, 0, 0).await;
+        } else {
+            let _ = app
+                .finish_job(
+                    ProjectId(job.project_id),
+                    job.id,
+                    JobStatus::Cancelled,
+                    Vec::new(),
+                    json!({"phase": "CANCELLED", "done": 0, "total": 0}),
+                )
+                .await;
+        }
+        return;
+    }
     if job.kind == "INDEX_BUILD" {
         if let Some(build_id) = job
             .input

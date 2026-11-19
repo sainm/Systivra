@@ -201,6 +201,24 @@ impl Store {
         Ok((row.get("id"), row.get("name"), row.get("revision")))
     }
 
+    /// 有効な埋め込みモデルの一覧。UI の選択肢はここから作る
+    /// （モデル名をコードに埋めない）。
+    pub async fn list_embedding_models(
+        &self,
+        tx: &mut Tx<'_>,
+    ) -> Result<Vec<(String, String, i32)>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT name, revision, dim FROM corpus.embedding_model
+              WHERE enabled ORDER BY name, revision",
+        )
+        .fetch_all(&mut **tx)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|row| (row.get("name"), row.get("revision"), row.get("dim")))
+            .collect())
+    }
+
     pub async fn embedding_model_by_name(
         &self,
         tx: &mut Tx<'_>,
@@ -701,7 +719,7 @@ impl Store {
                     stats = $3,
                     error = $4,
                     started_at = COALESCE(started_at, now()),
-                    finished_at = CASE WHEN $2 IN ('SUCCEEDED','FAILED','PARTIAL')
+                    finished_at = CASE WHEN $2 IN ('SUCCEEDED','FAILED','PARTIAL','CANCELLED')
                                        THEN now() ELSE finished_at END
               WHERE id = $1",
         )

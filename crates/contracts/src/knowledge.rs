@@ -158,7 +158,20 @@ pub struct AuditListResponse {
     pub items: Vec<AuditEntry>,
 }
 
-#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
+/// 索引ビルドで選べる埋め込みモデル。UI が名前を直書きしないための一覧。
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct EmbeddingModelOption {
+    pub name: String,
+    pub revision: String,
+    pub dim: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct EmbeddingModelListResponse {
+    pub items: Vec<EmbeddingModelOption>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateIndexBuildRequest {
     pub model: String,
 }
