@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-11-19 — Dockerfile / nginx の静的検査
+
+### Added
+
+- `scripts/check-dockerfile.sh`（デーモン不要）:
+  - `crates/*` が Dockerfile の `COPY` と stub 生成の両方に載っているか
+    （載っていないと、crate を足した瞬間に**依存キャッシュ層でビルドが落ちる**）
+  - `systivra-api` / `systivra-worker` が実際の crate にあり、最終イメージへ
+    コピーされているか
+  - nginx の `proxy_pass` 先が compose のサービス名・`PORT` と一致するか
+  - SPA のフォールバック（`try_files $uri /index.html`）があるか
+- 検査が**実際に落ちること**を確認:
+  - `crates/zzprobe` を足す → COPY と stub の 2 件が FAIL
+  - compose の `PORT` を 9090 に変える → proxy_pass との不一致で FAIL
+
+### Note
+
+Docker デーモンが無いため `docker build` / `compose up` 自体は未検証。
+この検査が見るのは「構成の整合」であって、ビルドが通る保証ではない。
+
 ## 2026-11-19 — docker compose の DB 初期化を「列挙」から「走査」へ
 
 ### Fixed

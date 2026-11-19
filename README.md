@@ -144,6 +144,7 @@ db / api / worker / web を起動し、コンテナ経由の E2E まで通して
 ```bash
 cargo test --workspace
 ./scripts/check-compose.sh                            # compose の静的検査（デーモン不要）
+./scripts/check-dockerfile.sh                         # Dockerfile / nginx の静的検査（デーモン不要）
 PGHOST=localhost ./scripts/verify-db.sh   # 空 DB に 001〜033 を適用して RLS / 分区 / graph / code / impact / test / ai / inquiry / sso / session / scim / 投影運用 / Enterprise 残件 / ジョブ取消を確認
 
 各 phase の受入表に書かれた `001〜0xx` や i18n キー数・ツール実行本数は、
