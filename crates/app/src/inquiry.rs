@@ -39,6 +39,17 @@ fn stable_uuid(project: ProjectId, parts: &[&str]) -> Uuid {
     Uuid::new_v5(&project.0, &hasher.finalize()[..16])
 }
 
+/// 取得スコアが閾値の近くにあるか（0.7〜1.3 倍）。
+///
+/// 近いときは「どちらに転んでもおかしくない」状態で、コーパスが変われば
+/// 結果が反転しうる。黙って挙動が変わるのを避けるために警告を出す。
+fn rank_near_threshold(top: f64, min_rank: f64) -> bool {
+    if !top.is_finite() || !min_rank.is_finite() || min_rank <= 0.0 {
+        return false;
+    }
+    (0.7..=1.3).contains(&(top / min_rank))
+}
+
 fn normalize(text: &str) -> String {
     // NFKC まではやらない（依存を増やさない）。全角空白・大文字小文字・前後空白だけ寄せる。
     text.chars()
@@ -526,15 +537,35 @@ impl App {
                     // 効き方が変わる値なので、ここは**校正済みの定数**として扱い、
                     // 変えるときは実測し直すこと。閾値が無いと、どんな質問でも
                     // 文書が候補になり `NOT_FOUND_SEED` に到達しない。
-                    const MIN_SEED_RANK: f64 = 3.0;
-                    let kept = hits.iter().filter(|hit| hit.score >= MIN_SEED_RANK).count();
+                    // 閾値は**校正値**。コーパスが変わると意味が変わるので、
+                    // 環境変数で差し替えられるようにし、近づいたら警告を出す
+                    // （黙って効かなくなるのが一番困る）。
+                    //
+                    // 実測（2026-11-19、100 chunk）: 実質問 6.2 / 7.4、
+                    // 無関係な質問 1.4 / 1.6。語の一致数では分けられない
+                    // （「存在しない画面Zzz」も汎用語「画面」で 2 語一致する）。
+                    let min_rank = std::env::var("SEED_MIN_RANK")
+                        .ok()
+                        .and_then(|value| value.parse::<f64>().ok())
+                        .filter(|value| value.is_finite() && *value >= 0.0)
+                        .unwrap_or(3.0);
+                    if let Some(top) = hits.first().map(|hit| hit.score) {
+                        if rank_near_threshold(top, min_rank) {
+                            tracing::warn!(
+                                top,
+                                min_rank,
+                                "seed の rank が閾値に近い（コーパスが変わったら校正し直す）"
+                            );
+                        }
+                    }
+                    let kept = hits.iter().filter(|hit| hit.score >= min_rank).count();
                     tracing::debug!(hits = hits.len(), kept, "rag seed candidates");
                     // ヒットした本文を繋いで、そこに**名前が出てくる実体**を拾う。
                     // 文書そのものをシードにはしない — `Document` からはコードへ
                     // 辿れず、影響が空のレポートが出るだけだった（2026-11-19 実測）。
                     let corpus_text: String = hits
                         .iter()
-                        .filter(|hit| hit.score >= MIN_SEED_RANK)
+                        .filter(|hit| hit.score >= min_rank)
                         .map(|hit| hit.quote.as_str())
                         .collect::<Vec<_>>()
                         .join("\n")
@@ -1550,5 +1581,24 @@ mod tests {
             report["summary"]["degraded"],
             json!(["documents_not_indexed", "ai_inferred"])
         );
+    }
+}
+
+#[cfg(test)]
+mod rank_tests {
+    use super::rank_near_threshold;
+
+    #[test]
+    fn flags_scores_close_to_threshold() {
+        // 近いときは「どちらに転んでもおかしくない」ので警告対象。
+        assert!(rank_near_threshold(6.2, 7.0));
+        assert!(rank_near_threshold(3.0, 3.0));
+        assert!(rank_near_threshold(3.9, 3.0));
+        // 離れていれば黙っている。
+        assert!(!rank_near_threshold(6.2, 3.0));
+        assert!(!rank_near_threshold(1.4, 3.0));
+        // 壊れた入力で警告を出さない。
+        assert!(!rank_near_threshold(f64::NAN, 3.0));
+        assert!(!rank_near_threshold(1.0, 0.0));
     }
 }

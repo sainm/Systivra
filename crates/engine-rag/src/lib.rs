@@ -172,6 +172,29 @@ pub fn tokenized_text(input: &str) -> String {
     search_tokens(input).join(" ")
 }
 
+/// 質問から照合用の語を取り出す（2 文字以上・重複除去・最大 32 個）。
+///
+/// 「いくつの語が本文に現れたか」を数えるために使う。この数はコーパスの
+/// 大きさに依存しないので、`ts_rank` の絶対閾値より安定する。
+pub fn query_tokens(input: &str) -> Vec<String> {
+    let mut tokens: Vec<String> = search_tokens(input)
+        .into_iter()
+        .filter(|token| token.chars().count() >= 2)
+        .collect();
+    tokens.sort();
+    tokens.dedup();
+    tokens.truncate(32);
+    tokens
+}
+
+/// `text` に現れた質問語の数。
+pub fn matched_terms(tokens: &[String], text: &str) -> usize {
+    tokens
+        .iter()
+        .filter(|token| text.contains(token.as_str()))
+        .count()
+}
+
 pub fn tsquery(input: &str) -> String {
     let mut tokens: Vec<String> = search_tokens(input)
         .into_iter()

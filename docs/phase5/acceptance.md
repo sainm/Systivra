@@ -243,7 +243,7 @@ hub として展開を打ち切り、性能 chain は depth 0〜5 の 6 層を�
 | SSE `partial → done` | **PASS** | `text/event-stream`、`Last-Event-ID` 再開。5 段の順序と欠番を実測 |
 | 250 万 Fact / 6 ホップ性能 | **PASS（合成）** | 2,500,005 edge、frontier 限定、1.07s。全件ロードなし |
 | 本番 DB の impact report 保存形式 | **暫定** | `impact.assessment_draft.report` JSONB。大規模時は artifact へ退避 |
-| RAG 併用 seed | **実装（既定で有効、`SEED_RAG=0` で無効）** | 語彙検索で当たった本文（`ts_rank >= 3.0`）を最大 8,000 文字まで繋ぎ、**そこに名前が出てくる実体**を候補にする（`Document` / `Section` は除外 — 文書からはコードへ辿れず、影響が空になる）。閾値は実測で校正: 実質問 6.2 / 7.4、無関係な質問 1.4 / 1.6（100 chunk）。閾値が無いとどんな質問でも候補が立ち `NOT_FOUND_SEED` に到達しない。候補は確度 0.55、名前一致と重なれば +0.05。実測（`scripts/rag-seed-doc-eval.py`）: 「Hello クラスが挨拶文を組み立てる」と書いた設計書 PDF を取り込み、**Hello を含まない**質問「挨拶を組み立てる処理はどこにありますか」→ 候補 `jsp` / `Caller` / `Hello`（`NEEDS_CLARIFICATION`）、`Hello` を選ぶと影響 12〜13 件。文書だけの DB では候補 0 件（`NOT_FOUND_SEED`）|
+| RAG 併用 seed | **実装（既定で有効、`SEED_RAG=0` で無効）** | 語彙検索で当たった本文（`ts_rank >= 3.0`）を最大 8,000 文字まで繋ぎ、**そこに名前が出てくる実体**を候補にする（`Document` / `Section` は除外 — 文書からはコードへ辿れず、影響が空になる）。閾値は実測で校正（既定 3.0、`SEED_MIN_RANK` で差し替え可）: 実質問 6.2 / 7.4、無関係な質問 1.4 / 1.6（100 chunk）。取得スコアが閾値の 0.7〜1.3 倍に入ると警告を出す。語の一致数では分けられない（「存在しない画面Zzz」も汎用語「画面」で 2 語一致する）ため、閾値は rank 側に置いている。閾値が無いとどんな質問でも候補が立ち `NOT_FOUND_SEED` に到達しない。候補は確度 0.55、名前一致と重なれば +0.05。実測（`scripts/rag-seed-doc-eval.py`）: 「Hello クラスが挨拶文を組み立てる」と書いた設計書 PDF を取り込み、**Hello を含まない**質問「挨拶を組み立てる処理はどこにありますか」→ 候補 `jsp` / `Caller` / `Hello`（`NEEDS_CLARIFICATION`）、`Hello` を選ぶと影響 12〜13 件。文書だけの DB では候補 0 件（`NOT_FOUND_SEED`）|
 
 ---
 
