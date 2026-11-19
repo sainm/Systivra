@@ -53,7 +53,32 @@ try {
   );
   const after = await page.locator(".wf-node").count();
 
-  await page.getByRole("button", { name: "新しい版として保存" }).click();
+  // **追加しただけでは保存できない。** 到達できないノードは
+  // 実行されない設定なので、サーバーもエディタも弾く（2026-11-19）。
+  // ここでは「弾かれること」を確認してから、実際につないで保存する。
+  const saveButton = page.getByRole("button", { name: "新しい版として保存" });
+  // 押せない状態になっていること自体が期待値（理由も画面に出る）。
+  await page
+    .getByText("start から到達できないノードがあります")
+    .first()
+    .waitFor({ timeout: 10_000 });
+  assert.equal(
+    await saveButton.isDisabled(),
+    true,
+    "到達できないノードがあるのに保存できてしまう",
+  );
+
+  // 直前のノードから新しいノードへ辺を張る。
+  const previous = page.locator(".wf-node").nth(1);
+  await previous.click();
+  await page.getByRole("button", { name: "繋ぐ" }).click();
+  await page.locator(".wf-node").last().click();
+  await page.waitForFunction(
+    (count) => document.querySelectorAll(".wf-edge").length >= count,
+    before - 1,
+  );
+
+  await saveButton.click();
   await page.getByText("保存しました").waitFor({ timeout: 30_000 });
   const versionLabel = await page.locator(".page-head .chip").first().innerText();
 

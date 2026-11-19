@@ -624,5 +624,7 @@
   "ontology.matrixTruncated": "只显示前 40 个，请用过滤缩小范围。",
   "ontology.matrixWildcard": "适用于任意类型的关系（*）",
   "ontology.filter": "过滤类型",
-  "ontology.matrixPicked": "已把起点和终点填进表单，请填写关系类型名称后添加。"
+  "ontology.matrixPicked": "已把起点和终点填进表单，请填写关系类型名称后添加。",
+  "workflow.unreachable": "有从 start 不可达的节点",
+  "workflow.selfLoop": "节点不能连到自己"
 }

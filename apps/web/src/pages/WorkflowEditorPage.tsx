@@ -118,6 +118,27 @@ export function WorkflowEditorPage({
     const ids = new Set(nodes.map((node) => node.id));
     for (const edge of edges) {
       if (!ids.has(edge.from) || !ids.has(edge.to)) list.push(t("workflow.danglingEdge"));
+      if (edge.from === edge.to) list.push(t("workflow.selfLoop"));
+    }
+    // サーバーと同じ到達性チェック。押してから 400 で返るより、
+    // 押せない理由がその場で分かるほうがよい（detail/06 の検証と対）。
+    const start = nodes.find((node) => node.kind === "start");
+    if (start) {
+      const adjacency = new Map<string, string[]>();
+      for (const edge of edges) {
+        const list = adjacency.get(edge.from) ?? [];
+        list.push(edge.to);
+        adjacency.set(edge.from, list);
+      }
+      const seen = new Set<string>();
+      const stack = [start.id];
+      while (stack.length > 0) {
+        const current = stack.pop() as string;
+        if (seen.has(current)) continue;
+        seen.add(current);
+        for (const next of adjacency.get(current) ?? []) stack.push(next);
+      }
+      if (nodes.some((node) => !seen.has(node.id))) list.push(t("workflow.unreachable"));
     }
     for (const node of nodes) {
       if (node.kind === "capability" && !node.capability) list.push(t("workflow.needCapability"));

@@ -624,5 +624,7 @@
   "ontology.matrixTruncated": "40 件までに絞っています。検索で絞り込んでください。",
   "ontology.matrixWildcard": "任意の型に効く関係型（*）",
   "ontology.filter": "型を絞り込む",
-  "ontology.matrixPicked": "始点と終点をフォームに入れました。関係型の名前を入れて追加してください。"
+  "ontology.matrixPicked": "始点と終点をフォームに入れました。関係型の名前を入れて追加してください。",
+  "workflow.unreachable": "start から到達できないノードがあります",
+  "workflow.selfLoop": "自分自身への接続はできません"
 }

@@ -1,3 +1,8 @@
+// 前提: **Phase 5 の受入用フィクスチャ**（設計書がコードシンボルに言及している状態）。
+// 差分評価で「影響する設計書」「変更行」が出ることを期待するため、文書とコードが
+// 結び付いていない DB では後半が落ちる。土台は scripts/phase4-eval.py と
+// scripts/seed-phase4.sh。文書だけの DB で前段（証跡つき項目）だけ見たい場合は
+// 「影響する設計書」以降をコメントアウトする。
 import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
 
@@ -34,8 +39,24 @@ try {
 
   await page.getByRole("button", { name: "影響 Draft を作成" }).click();
   await page.locator(".impact-item").first().waitFor({ timeout: 30_000 });
-  const entityItems = await page.locator(".impact-item").count();
-  const entityEvidence = await page.locator(".impact-evidence").count();
+
+  // 先頭の種子が「証跡を持たない実体」だと evidence が 0 になる
+  // （DB の状態しだい）。**証跡が出る種子を選ぶまで数件試す**。
+  // 検証したいのは「証跡が描画されること」であって「先頭が証跡を持つこと」ではない。
+  const options = page.locator(".impact-entity-option");
+  const optionCount = await options.count();
+  let entityItems = 0;
+  let entityEvidence = 0;
+  for (let index = 0; index < Math.min(optionCount, 3); index += 1) {
+    if (index > 0) {
+      await options.nth(index).click();
+      await page.getByRole("button", { name: "影響 Draft を作成" }).click();
+      await page.locator(".impact-item").first().waitFor({ timeout: 30_000 });
+    }
+    entityItems = await page.locator(".impact-item").count();
+    entityEvidence = await page.locator(".impact-evidence").count();
+    if (entityItems >= 1 && entityEvidence >= 1) break;
+  }
   assert.ok(entityItems >= 1, "entity impact must render evidence-backed items");
   assert.ok(entityEvidence >= 1, "entity impact must render evidence");
   assert.ok(

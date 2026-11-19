@@ -624,5 +624,7 @@
   "ontology.matrixTruncated": "Showing the first 40. Narrow it down with the filter.",
   "ontology.matrixWildcard": "Relation types that apply to any type (*)",
   "ontology.filter": "Filter types",
-  "ontology.matrixPicked": "Source and target are in the form. Name the relation type and add it."
+  "ontology.matrixPicked": "Source and target are in the form. Name the relation type and add it.",
+  "workflow.unreachable": "Some nodes are unreachable from start",
+  "workflow.selfLoop": "A node cannot connect to itself"
 }
