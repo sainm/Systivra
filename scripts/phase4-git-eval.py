@@ -90,6 +90,28 @@ def wait_job_failure(job_id: str) -> dict:
     raise TimeoutError(f"job {job_id} did not finish")
 
 
+def psql(sql: str) -> str:
+    import os
+
+    result = subprocess.run(
+        [
+            "psql",
+            "-d",
+            os.environ.get("PGDATABASE", "systivra"),
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-tA",
+            "-c",
+            sql,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"psql failed: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
 def write_java(path: pathlib.Path, name: str, body: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -121,6 +143,38 @@ def main() -> int:
         SOURCE / "src/main/java/com/example/World.java",
         "World",
         '    public String name() {\n        return "world";\n    }',
+    )
+    # 逆依存の検証用: Hello.greet() を呼ぶファイル。Hello の**シグネチャ**が
+    # 変わったとき、この Caller も再解析されなければならない。
+    write_java(
+        SOURCE / "src/main/java/com/example/Caller.java",
+        "Caller",
+        '    public String call() {\n        return new Hello().greet();\n    }',
+    )
+    # JSP の scriptlet。画面 → Java メソッドの CALLS が張られることを見る。
+    jsp_path = SOURCE / "src/main/webapp/edit.jsp"
+    jsp_path.parent.mkdir(parents=True, exist_ok=True)
+    jsp_path.write_text(
+        "<%@ page contentType=\"text/html;charset=UTF-8\" %>\n"
+        "<%@ taglib prefix=\"fmt\" uri=\"http://java.sun.com/jsp/jstl/fmt\" %>\n"
+        "<html><body>\n"
+        "<%\n  String greeting = new Hello().greet();\n%>\n"
+        "<p><fmt:message key=\"greeting\"/></p>\n"
+        "<p><fmt:nosuchtag key=\"x\"/></p>\n"
+        "<p><%= greeting %></p>\n"
+        "</body></html>\n",
+        encoding="utf-8",
+    )
+    # カスタムタグの解決に使う TLD。無い場合は UNRESOLVED になる（推測しない）。
+    tld_path = SOURCE / "src/main/webapp/WEB-INF/fmt.tld"
+    tld_path.parent.mkdir(parents=True, exist_ok=True)
+    tld_path.write_text(
+        "<%s version=\"2.1\">\n"
+        "  <short-name>fmt</short-name>\n"
+        "  <uri>http://java.sun.com/jsp/jstl/fmt</uri>\n"
+        "  <tag><name>message</name></tag>\n"
+        "</taglib>\n" % '<?xml version="1.0" encoding="UTF-8"?>\n<taglib',
+        encoding="utf-8",
     )
     git("add", ".", cwd=SOURCE)
     git("-c", "user.name=eval", "-c", "user.email=eval@example.test", "commit", "-qm", "init", cwd=SOURCE)
@@ -165,7 +219,7 @@ def main() -> int:
     )["items"]
     check("branch 同期が commit SHA に解決される", revisions[0]["revision"] == first_sha, revisions[0]["revision"])
     check("tree digest が付く", len(revisions[0]["tree_digest"]) > 0)
-    check("ファイル数が 2", revisions[0]["file_count"] == 2, str(revisions[0]["file_count"]))
+    check("ファイル数が 5（Hello / World / Caller / edit.jsp / fmt.tld）", revisions[0]["file_count"] == 5, str(revisions[0]["file_count"]))
 
     analysis1 = call(
         "POST",
@@ -177,6 +231,46 @@ def main() -> int:
     check("解析が成功する", run1["status"] == "SUCCEEDED", run1["status"])
     check("Symbol が生成される", run1["symbols"] >= 2, str(run1["symbols"]))
     check("Fact が生成される", run1["facts"] > 0, str(run1["facts"]))
+    jsp_call = psql(
+        "SELECT subject_kind || '|' || subject_key || '|' || object_key || '|' || resolution "
+        "FROM code.fact WHERE relation='CALLS' AND analysis_engine='jsp-scriptlet' LIMIT 1;"
+    )
+    check(
+        "JSP scriptlet が CALLS 事実を生む（画面 → Java）",
+        jsp_call.startswith("Screen|Jsp:src/main/webapp/edit.jsp|")
+        and jsp_call.endswith("|RESOLVED"),
+        jsp_call or "(なし)",
+    )
+    tld_declare = psql(
+        "SELECT subject_key || '|' || object_key || '|' || resolution FROM code.fact "
+        "WHERE relation='DECLARES' AND analysis_engine='tld' LIMIT 1;"
+    )
+    check(
+        "TLD が DECLARES 事実を生む",
+        tld_declare.startswith("Tld:src/main/webapp/WEB-INF/fmt.tld|")
+        and tld_declare.endswith("|RESOLVED"),
+        tld_declare or "(なし)",
+    )
+    tag_resolved = psql(
+        "SELECT object_key || '|' || resolution FROM code.fact "
+        "WHERE relation='REFERENCES' AND analysis_engine='jsp-tag' "
+        "AND object_key LIKE '%#message' LIMIT 1;"
+    )
+    check(
+        "TLD があるカスタムタグは RESOLVED",
+        tag_resolved.endswith("|RESOLVED"),
+        tag_resolved or "(なし)",
+    )
+    tag_missing = psql(
+        "SELECT object_key || '|' || resolution FROM code.fact "
+        "WHERE relation='REFERENCES' AND analysis_engine='jsp-tag' "
+        "AND object_key LIKE '%#nosuchtag' LIMIT 1;"
+    )
+    check(
+        "TLD に無いタグは UNRESOLVED（推測しない）",
+        tag_missing.endswith("|UNRESOLVED"),
+        tag_missing or "(なし)",
+    )
 
     git("tag", "v1", cwd=SOURCE)
     git("push", "-q", str(BARE), "v1", cwd=SOURCE)
@@ -199,7 +293,7 @@ def main() -> int:
     write_java(
         SOURCE / "src/main/java/com/example/Hello.java",
         "Hello",
-        '    public String greet() {\n        return "hello git";\n    }',
+        '    public String greet(String suffix) {\n        return "hello git " + suffix;\n    }',
     )
     git("add", ".", cwd=SOURCE)
     git("-c", "user.name=eval", "-c", "user.email=eval@example.test", "commit", "-qm", "change", cwd=SOURCE)
@@ -244,7 +338,48 @@ def main() -> int:
     wait_job(analysis2["job_id"])
     run2 = call("GET", f"/code/analysis-runs/{analysis2['run_id']}")
     analyzed = int(run2["stats"]["files_analyzed"])
-    check("変更ファイルだけ再解析される", analyzed == 1, f"files_analyzed={analyzed}")
+    callers = int(run2["stats"].get("files_reanalyzed_for_callers", -1))
+    changed_files = int(run2["stats"]["files_changed"])
+    check("変更は 1 ファイル", changed_files == 1, f"files_changed={changed_files}")
+    check(
+        "シグネチャ変更で呼び出し元も再解析される（逆依存 1 層）",
+        analyzed == 2 and callers == 1,
+        f"files_analyzed={analyzed} callers={callers}",
+    )
+
+    # 本体だけの変更では呼び出し元を巻き込まない（シグネチャ比較が効いている）。
+    write_java(
+        SOURCE / "src/main/java/com/example/Hello.java",
+        "Hello",
+        '    public String greet(String suffix) {\n        return "hello again " + suffix;\n    }',
+    )
+    git("add", ".", cwd=SOURCE)
+    git("-c", "user.name=eval", "-c", "user.email=eval@example.test", "commit", "-qm", "body only", cwd=SOURCE)
+    git("push", "-q", str(BARE), "main", cwd=SOURCE)
+    sync3 = call(
+        "POST",
+        f"/projects/{project_id}/code/revisions:sync",
+        {"repository_id": repository["id"], "revision": "main"},
+    )
+    wait_job(sync3["job_id"])
+    revisions3 = call(
+        "GET",
+        f"/projects/{project_id}/code/revisions?repository_id={repository['id']}&limit=10",
+    )["items"]
+    analysis3 = call(
+        "POST",
+        f"/projects/{project_id}/code/analysis-runs",
+        {"revision_id": revisions3[0]["id"]},
+    )
+    wait_job(analysis3["job_id"])
+    run3 = call("GET", f"/code/analysis-runs/{analysis3['run_id']}")
+    analyzed3 = int(run3["stats"]["files_analyzed"])
+    callers3 = int(run3["stats"].get("files_reanalyzed_for_callers", -1))
+    check(
+        "本体だけの変更では呼び出し元を再解析しない",
+        analyzed3 == 1 and callers3 == 0,
+        f"files_analyzed={analyzed3} callers={callers3}",
+    )
 
     bad_sync = call(
         "POST",
@@ -258,7 +393,12 @@ def main() -> int:
         "GET",
         f"/projects/{project_id}/code/revisions?repository_id={repository['id']}&limit=10",
     )["items"]
-    check("同期失敗では revision を追加しない", len(revisions_failed) == 2, str(len(revisions_failed)))
+    # 件数を固定値で書かない（コミットを増やすたびに壊れる）。直前の件数と比べる。
+    check(
+        "同期失敗では revision を追加しない",
+        len(revisions_failed) == len(revisions3),
+        f"{len(revisions_failed)} != {len(revisions3)}",
+    )
 
     report = {
         "tag": TAG,

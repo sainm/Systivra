@@ -58,6 +58,15 @@ class Client:
                 parsed = {"raw": raw.decode("utf-8", "replace")}
             return error.code, parsed
 
+    def raw(self, method: str, path: str) -> tuple[int, str, dict]:
+        """JSON でない応答（YAML など）をそのまま読む。"""
+        request = urllib.request.Request(f"{BASE_URL}/api/v1{path}", method=method)
+        try:
+            with self.opener.open(request, timeout=30) as response:
+                return response.status, response.read().decode("utf-8"), dict(response.headers)
+        except urllib.error.HTTPError as error:
+            return error.code, error.read().decode("utf-8", "replace"), dict(error.headers)
+
     def must(self, method: str, path: str, body: dict | None = None) -> dict:
         status, payload = self.call(method, path, body)
         if status >= 400:
@@ -694,6 +703,43 @@ def main() -> int:
     )
     assert status == 400, (status, write_rejected)
     REPORT["workflow_write_capability_rejected"] = status
+
+    # 到達できない node は弾く（実行後に「なぜ動かないか」を追わなくて済むように）。
+    status, unreachable = client.call(
+        "POST",
+        f"/projects/{pid}/workflows",
+        {
+            "code": "orphan-node",
+            "definition": {
+                "nodes": [
+                    {"id": "start", "kind": "start", "name": "開始"},
+                    {"id": "end", "kind": "end", "name": "終了"},
+                    {
+                        "id": "lonely",
+                        "kind": "capability",
+                        "name": "孤立",
+                        "capability": "coverage.get",
+                    },
+                ],
+                "edges": [{"from": "start", "to": "end"}],
+            },
+        },
+    )
+    assert status == 400, (status, unreachable)
+    REPORT["workflow_unreachable_rejected"] = status
+
+    # 定義の書き出し（json / yaml）。YAML は片方向。
+    status, exported_json = client.call(
+        "GET", f"/projects/{pid}/workflows/{workflow['id']}/export?format=json"
+    )
+    assert status == 200, (status, exported_json)
+    status_yaml, yaml_text, yaml_headers = client.raw(
+        "GET", f"/projects/{pid}/workflows/{workflow['id']}/export?format=yaml"
+    )
+    assert status_yaml == 200, (status_yaml, yaml_text)
+    assert "yaml" in yaml_headers.get("Content-Type", "").lower(), yaml_headers
+    assert "code:" in yaml_text and "edges:" in yaml_text, yaml_text[:120]
+    REPORT["workflow_export"] = {"json": status, "yaml": status_yaml}
 
     # ── 6.5 承認ノードの後ろなら破壊的操作も実行できる ─────
     # 承認は「同意ボタン」ではない。承認ノードを経路上に置いた定義だけが

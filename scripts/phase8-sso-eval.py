@@ -228,10 +228,11 @@ def cleanup_fixture():
              WHERE user_id IN (
                SELECT id FROM core.app_user
                 WHERE (id='{USER_ID}' AND login_id='sso-eval')
-                   OR login_id='scim-eval'
+                   OR login_id IN ('scim-eval', 'scim-put-eval')
              );
             DELETE FROM core.app_user
-             WHERE (id='{USER_ID}' AND login_id='sso-eval') OR login_id='scim-eval';
+             WHERE (id='{USER_ID}' AND login_id='sso-eval')
+                OR login_id IN ('scim-eval', 'scim-put-eval');
             """
         )
     except Exception as exc:
@@ -251,6 +252,9 @@ def main():
     if not API_BIN.exists():
         raise SystemExit(f"missing {API_BIN}; run cargo build -p api")
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    # **同じ DB で連続実行しても成立させる。** 前回の実行が残したセッションを
+    # 消さないと「current が 1 件」が 2 件になって必ず落ちる（コードの退行ではない）。
+    psql(f"DELETE FROM core.session WHERE user_id='{USER_ID}';")
     seed_identity()
     mock = api = no_oidc = None
     try:
@@ -357,6 +361,130 @@ def main():
             status == 200 and role == "VIEWER|SCIM",
             f"{status} {role}",
         )
+
+        # ── SCIM Users: PUT 完全置換 / 任意属性 PATCH ──
+        users_base = f"http://127.0.0.1:{API_PORT}/scim/v2/Users"
+        user_headers = {**scim_headers, "Content-Type": "application/json"}
+        status, _, raw = http(
+            "POST",
+            users_base,
+            body=json.dumps(
+                {
+                    "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
+                    "userName": "scim-put-eval",
+                    "displayName": "PUT Before",
+                    "emails": [{"value": "before@example.com", "primary": True}],
+                }
+            ).encode(),
+            headers=user_headers,
+        )
+        created = json.loads(raw) if status == 201 else {}
+        put_uid = created.get("id", "")
+        check("SCIM User を作成できる", status == 201 and put_uid != "", f"{status} {raw[:120]!r}")
+
+        status, _, raw = http(
+            "PUT",
+            f"{users_base}/{put_uid}",
+            body=json.dumps(
+                {
+                    "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
+                    "userName": "scim-put-eval",
+                    "displayName": "PUT After",
+                    "emails": [{"value": "after@example.com"}],
+                    "active": True,
+                }
+            ).encode(),
+            headers=user_headers,
+        )
+        db_row = psql(
+            "SELECT display_name || '|' || COALESCE(email, '-') FROM core.app_user "
+            "WHERE login_id='scim-put-eval';"
+        )
+        check(
+            "PUT が displayName / email を置換する",
+            status == 200 and db_row == "PUT After|after@example.com",
+            f"{status} {db_row}",
+        )
+
+        status, _, raw = http(
+            "PUT",
+            f"{users_base}/{put_uid}",
+            body=json.dumps({"userName": "scim-put-eval"}).encode(),
+            headers=user_headers,
+        )
+        replaced = json.loads(raw) if status == 200 else {}
+        check(
+            "PUT は省略した属性を既定へ戻す（displayName=userName, emails=[]）",
+            status == 200
+            and replaced.get("displayName") == "scim-put-eval"
+            and replaced.get("emails") == [],
+            f"{status} {raw[:160]!r}",
+        )
+
+        status, _, raw = http(
+            "PUT",
+            f"{users_base}/{put_uid}",
+            body=json.dumps({"userName": "renamed-eval"}).encode(),
+            headers=user_headers,
+        )
+        check("PUT で userName を変えると 400", status == 400, f"{status} {raw[:120]!r}")
+
+        status, _, raw = http(
+            "PATCH",
+            f"{users_base}/{put_uid}",
+            body=json.dumps(
+                {
+                    "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+                    "Operations": [
+                        {"op": "replace", "path": "displayName", "value": "Patched Name"}
+                    ],
+                }
+            ).encode(),
+            headers=user_headers,
+        )
+        patched = json.loads(raw) if status == 200 else {}
+        check(
+            "PATCH が任意属性 displayName を更新する",
+            status == 200 and patched.get("displayName") == "Patched Name",
+            f"{status} {raw[:120]!r}",
+        )
+
+        status, _, raw = http(
+            "PATCH",
+            f"{users_base}/{put_uid}",
+            body=json.dumps(
+                {
+                    "Operations": [
+                        {
+                            "op": "replace",
+                            "path": 'emails[type eq "work"].value',
+                            "value": "patched@example.com",
+                        }
+                    ]
+                }
+            ).encode(),
+            headers=user_headers,
+        )
+        email_row = psql(
+            "SELECT COALESCE(email, '-') FROM core.app_user WHERE login_id='scim-put-eval';"
+        )
+        check(
+            'PATCH が emails[type eq "work"].value を更新する',
+            status == 200 and email_row == "patched@example.com",
+            f"{status} {email_row}",
+        )
+
+        status, _, raw = http(
+            "PATCH",
+            f"{users_base}/{put_uid}",
+            body=json.dumps(
+                {"Operations": [{"op": "replace", "path": "nickName", "value": "x"}]}
+            ).encode(),
+            headers=user_headers,
+        )
+        check("PATCH の未知 path は 400（黙って捨てない）", status == 400, f"{status} {raw[:120]!r}")
+
+        http("DELETE", f"{users_base}/{put_uid}", headers=scim_headers)
         status, _, raw = http(
             "POST",
             f"http://127.0.0.1:{API_PORT}/scim/v2/Bulk",

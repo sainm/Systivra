@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import ssl
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -149,4 +150,12 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+    server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    # 検証用の TLS 終端。AI_TLS=1 のときだけ使う。
+    cert = os.environ.get("MOCK_LLM_TLS_CERT")
+    key = os.environ.get("MOCK_LLM_TLS_KEY")
+    if cert and key:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert, key)
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+    server.serve_forever()

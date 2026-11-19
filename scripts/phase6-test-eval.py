@@ -178,6 +178,19 @@ def main() -> int:
     assert derived["scenario_count"] > 0
     REPORT["derive"] = derived
 
+    # 派生が全ルールに目を配れているか。以前はルール順に流して上限で切っていたため
+    # 24 画面 14 ルールで被覆 2 しかなかった（先頭の規則が枠を食い尽くす）。
+    rule_total = int(psql("SELECT count(*) FROM test.validation_rule;"))
+    rule_covered = int(
+        psql(
+            "SELECT count(DISTINCT r) FROM test.test_case c, "
+            "unnest(c.covers_rules) AS r;"
+        )
+    )
+    assert rule_total > 0, "ルールが抽出されていない"
+    assert rule_covered == rule_total, f"派生が全ルールを被覆していない: {rule_covered}/{rule_total}"
+    REPORT["derive_rule_coverage"] = {"rules": rule_total, "covered": rule_covered}
+
     overview = must("GET", f"/projects/{pid}/test/overview")
     assert not overview["runs"], "derive が test_run を作ってしまった"
     assert derived["plan_id"] in [p["id"] for p in overview["plans"]]
@@ -394,6 +407,36 @@ def main() -> int:
         "status": second_run["status"],
         "lock_acquired": second_run["lock_acquired"],
         "job_id": second_run["job_id"],
+    }
+
+    # ── 計画ごとの対象ルール指定（rule 単位の派生スコープ） ──
+    rule_ids = [rule["id"] for rule in rules_response["rules"][:2]]
+    scoped = must(
+        "POST",
+        f"/projects/{pid}/test/plans:derive",
+        {"name": "範囲指定の計画", "max_drafts": 20, "rule_ids": rule_ids},
+    )
+    scoped_covered = int(
+        psql(
+            "SELECT count(DISTINCT r) FROM test.test_case c "
+            "JOIN test.test_scenario s ON s.id = c.scenario_id, "
+            "unnest(c.covers_rules) AS r "
+            f"WHERE s.plan_id = '{scoped['plan_id']}';"
+        )
+    )
+    assert scoped["draft_case_count"] > 0
+    assert scoped_covered == len(rule_ids), f"対象外のルールまで派生した: {scoped_covered}/{len(rule_ids)}"
+    status, _ = call(
+        "POST",
+        f"/projects/{pid}/test/plans:derive",
+        {"max_drafts": 5, "rule_ids": ["00000000-0000-4000-8000-000000000000"]},
+    )
+    assert status == 400, f"未知の rule_id が 400 にならない: {status}"
+    REPORT["derive_scoped"] = {
+        "rule_ids": len(rule_ids),
+        "covered": scoped_covered,
+        "draft_cases": scoped["draft_case_count"],
+        "unknown_rule_status": status,
     }
 
     out = ROOT / "data" / "phase6-eval" / "report.json"

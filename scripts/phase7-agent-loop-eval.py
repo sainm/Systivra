@@ -134,12 +134,56 @@ def wait_job(client: Client, job_id: str) -> dict:
     raise TimeoutError(f"job {job_id} did not finish")
 
 
+def prepare_tls() -> tuple[str, str, str]:
+    """テスト用の CA とサーバー証明書を作る。`AI_TLS=1` のときだけ使う。
+
+    自己署名 1 枚で済ませない: rustls は `CA:TRUE` の証明書をサーバー証明書として
+    受け付けない（`CaUsedAsEndEntity`）。実運用の社内 CA と同じ形（CA → 葉）にする。
+    """
+    out = ROOT / "data" / "phase7-eval" / "tls"
+    out.mkdir(parents=True, exist_ok=True)
+    ca_cert, ca_key = out / "ca.pem", out / "ca.key"
+    leaf_cert, leaf_key, csr = out / "leaf.pem", out / "leaf.key", out / "leaf.csr"
+    ca_cnf, leaf_cnf = out / "ca.cnf", out / "leaf.cnf"
+    ca_cnf.write_text(
+        "[req]\ndistinguished_name=dn\nx509_extensions=v3\nprompt=no\n"
+        "[dn]\nCN=Systivra Test CA\n"
+        "[v3]\nbasicConstraints=critical,CA:TRUE\n"
+        "keyUsage=critical,keyCertSign,cRLSign\n"
+        "subjectKeyIdentifier=hash\n",
+        encoding="utf-8",
+    )
+    leaf_cnf.write_text(
+        "[req]\ndistinguished_name=dn\nprompt=no\n"
+        "[dn]\nCN=127.0.0.1\n"
+        "[v3]\nsubjectAltName=IP:127.0.0.1\n"
+        "basicConstraints=critical,CA:FALSE\n"
+        "keyUsage=critical,digitalSignature,keyEncipherment\n"
+        "extendedKeyUsage=serverAuth\n"
+        "subjectKeyIdentifier=hash\n"
+        "authorityKeyIdentifier=keyid,issuer\n",
+        encoding="utf-8",
+    )
+    run = lambda args: subprocess.run(args, check=True, capture_output=True)  # noqa: E731
+    run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+         "-keyout", str(ca_key), "-out", str(ca_cert), "-days", "1",
+         "-config", str(ca_cnf)])
+    run(["openssl", "req", "-newkey", "rsa:2048", "-nodes",
+         "-keyout", str(leaf_key), "-out", str(csr), "-config", str(leaf_cnf)])
+    run(["openssl", "x509", "-req", "-in", str(csr), "-CA", str(ca_cert),
+         "-CAkey", str(ca_key), "-CAcreateserial", "-out", str(leaf_cert),
+         "-days", "1", "-extfile", str(leaf_cnf), "-extensions", "v3"])
+    return str(ca_cert), str(leaf_cert), str(leaf_key)
+
+
 def main() -> int:
     api = worker = worker2 = llm = vite = None
     try:
         prepare_db()
+        tls = os.environ.get("AI_TLS") == "1"
+        tls_ca, tls_cert, tls_key = prepare_tls() if tls else ("", "", "")
         ai_env = {
-            "AI_BASE_URL": f"{LLM_BASE}/v1",
+            "AI_BASE_URL": f"https://127.0.0.1:{LLM_PORT}/v1" if tls else f"{LLM_BASE}/v1",
             "AI_MODEL_REASONING": "mock-1",
             "AI_MODEL_FAST": "mock-1",
             # 100 万トークンあたり 1 USD。mock は 11 + 7 トークンなので
@@ -147,6 +191,9 @@ def main() -> int:
             "AI_PRICE_INPUT_PER_1M": "1",
             "AI_PRICE_OUTPUT_PER_1M": "1",
         }
+        if tls:
+            # 自己署名 CA を信頼させる経路（AI_TLS_INSECURE のような検証無効化は無い）。
+            ai_env["AI_CA_BUNDLE"] = tls_ca
 
         llm = subprocess.Popen(
             [sys.executable, str(ROOT / "scripts" / "mock-llm.py"), str(LLM_PORT)],
@@ -154,11 +201,22 @@ def main() -> int:
                 os.environ,
                 MOCK_LLM_TRACE=str(LLM_TRACE),
                 MOCK_LLM_SLOW_SEC="4",
+                **({"MOCK_LLM_TLS_CERT": tls_cert, "MOCK_LLM_TLS_KEY": tls_key} if tls else {}),
             ),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
         time.sleep(0.6)  # mock は GET を持たないので起動待ちは固定
+        if tls:
+            # TLS ハンドシェイクの失敗は「AI 未設定」として静かに落ちるので、
+            # 先に疎通だけ確かめて原因を切り分けられるようにする。
+            import ssl as _ssl
+            import socket as _socket
+
+            probe = _ssl.create_default_context(cafile=tls_ca)
+            with _socket.create_connection(("127.0.0.1", LLM_PORT), timeout=5) as raw:
+                with probe.wrap_socket(raw, server_hostname="127.0.0.1"):
+                    pass
 
         api_env = dict(os.environ, **ai_env)
         api_env.update(
@@ -747,6 +805,7 @@ def main() -> int:
         assert audits >= 4, audits
         REPORT["audit_rows"] = audits
 
+        REPORT["ai_transport"] = {"tls": tls}
         out = ROOT / "data" / "phase7-eval" / "agent-loop.json"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(REPORT, ensure_ascii=False, indent=2), encoding="utf-8")
