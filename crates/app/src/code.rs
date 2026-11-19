@@ -758,6 +758,39 @@ impl App {
         let files_failed = batch.report.errors.len() as i64;
         let mut report = batch.report.clone();
         report.files_analyzed = changed_set.len() as u64;
+        // **「成功したのに 0 件」を黙って通さない。**
+        // 対象ファイルがあるのに 1 つも解析していないなら、増分の基準や
+        // 言語判定のどこかが壊れている（実際に起きた）。
+        let mut degraded_reasons = vec![
+            "classpath 未指定: 外部型・外部シグネチャは解決しない".to_string(),
+            "構文レベルのみ: 型解決は ADR-017 により行わない".to_string(),
+        ];
+        let zero = zero_result_reasons(
+            source_files.len(),
+            report.files_analyzed,
+            symbol_total as usize,
+        );
+        if !zero.is_empty() {
+            degraded_reasons.extend(zero.iter().map(|reason| reason.to_string()));
+            if zero
+                .iter()
+                .any(|reason| reason.starts_with("no_files_analyzed"))
+            {
+                tracing::warn!(
+                    files_total = source_files.len(),
+                    changed = changed.len(),
+                    "解析対象があるのに 0 ファイルしか解析していない"
+                );
+            } else {
+                tracing::warn!(files = report.files_analyzed, "解析結果が空");
+            }
+        }
+        let status = if files_failed > 0 || zero.iter().any(|r| r.starts_with("no_files_analyzed"))
+        {
+            "PARTIAL"
+        } else {
+            "SUCCEEDED"
+        };
         let stats = json!({
             "files_total": source_files.len(),
             "files_changed": changed.len(),
@@ -780,16 +813,8 @@ impl App {
                 "syntax": "tree-sitter-java-0.23/tree-sitter-html-0.23",
                 "semantic": "source-only"
             },
-            "degraded_reasons": [
-                "classpath 未指定: 外部型・外部シグネチャは解決しない",
-                "構文レベルのみ: 型解決は ADR-017 により行わない"
-            ]
+            "degraded_reasons": degraded_reasons
         });
-        let status = if files_failed > 0 {
-            "PARTIAL"
-        } else {
-            "SUCCEEDED"
-        };
         self.store()
             .finish_code_analysis(&mut tx, run_id, status, false, &stats, None)
             .await?;
@@ -1503,5 +1528,62 @@ mod tests {
         assert!(validate_git_revision("-h").is_err());
         assert!(validate_git_revision("main --help").is_err());
         assert!(validate_git_revision("").is_err());
+    }
+}
+
+/// 「成功したのに 0 件」を理由として返す。
+///
+/// 空の結果は失敗と違って**何も起きない**ので、放っておくと誰も気付けない。
+/// 対象ファイルがあるのに解析 0、解析したのにシンボル 0 は、どちらも
+/// 配線が壊れている合図（2026-11-19 に実際に起きた）。
+fn zero_result_reasons(
+    files_total: usize,
+    files_analyzed: u64,
+    symbols: usize,
+) -> Vec<&'static str> {
+    let mut reasons = Vec::new();
+    if files_total == 0 {
+        reasons.push("no_source_files: 対象ファイルが 1 つも無い");
+    } else if files_analyzed == 0 {
+        reasons.push("no_files_analyzed: 対象ファイルがあるのに 1 つも解析していない");
+    } else if symbols == 0 {
+        reasons.push("no_symbols: シンボルが 1 つも取れていない");
+    }
+    reasons
+}
+
+#[cfg(test)]
+mod zero_result_tests {
+    use super::zero_result_reasons;
+
+    #[test]
+    fn flags_empty_repository_separately() {
+        // コードが 1 つも無いリポジトリは「失敗」ではなく「対象外」。
+        assert_eq!(
+            zero_result_reasons(0, 0, 0),
+            vec!["no_source_files: 対象ファイルが 1 つも無い"]
+        );
+    }
+
+    #[test]
+    fn flags_files_present_but_nothing_analyzed() {
+        // これが実際に起きた事故。成功として返してはいけない。
+        assert_eq!(
+            zero_result_reasons(12, 0, 0),
+            vec!["no_files_analyzed: 対象ファイルがあるのに 1 つも解析していない"]
+        );
+    }
+
+    #[test]
+    fn flags_analyzed_but_no_symbols() {
+        assert_eq!(
+            zero_result_reasons(3, 3, 0),
+            vec!["no_symbols: シンボルが 1 つも取れていない"]
+        );
+    }
+
+    #[test]
+    fn stays_quiet_when_there_is_output() {
+        assert!(zero_result_reasons(3, 3, 15).is_empty());
     }
 }

@@ -1160,6 +1160,15 @@ impl App {
             no_logical_change: traversal.truncation.no_logical_change,
         };
         let risk = adjusted_risk(&traversal.risk.factors, &stats, &truncated);
+        // **シードは解けたのに影響 0 件**は、たいてい配線が壊れている。
+        // 空のレポートを「成功」として返すと、下流は「影響なし」と読む。
+        if items.is_empty() {
+            degraded.push("no_impact_items: シードは解決できたが影響項目が 0 件".into());
+            tracing::warn!(
+                seeds = seeds.seeds.len(),
+                "影響項目が 0 件（シードは解決済み）"
+            );
+        }
         degraded.sort();
         degraded.dedup();
         items.sort_by(|left, right| {

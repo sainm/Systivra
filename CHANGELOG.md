@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-11-19 — 「成功したのに 0 件」を可視化する
+
+今夜見つけた不具合はどれも**例外を投げずに間違える**ものだった（FK 違反で落ちた
+1 件を除く）。空の結果は失敗と違って何も起きないので、放置すると誰も気付かない。
+主要 2 経路に検出を入れた。
+
+### Added
+
+- コード解析（`zero_result_reasons`）:
+  - 対象ファイル 0 → `no_source_files`（失敗ではなく対象外）
+  - 対象ファイルあり・解析 0 → `no_files_analyzed` + **status を PARTIAL に落とす**
+  - 解析したがシンボル 0 → `no_symbols`
+  いずれも `stats.degraded_reasons` に載り、`warn` が出る。
+- 影響評価: シードは解決できたのに項目 0 → `no_impact_items` を `degraded` に追加し `warn`。
+  空レポートを「影響なし」と読ませない。
+
+### Verification
+
+- 単体: `zero_result_tests` 4 件（空リポジトリ / 12 ファイル 0 解析 / シンボル 0 / 正常）。
+- 実測:
+  - コードを含まないリポジトリ → `no_source_files`
+  - Document 実体をシードにした影響評価 → `items 0` かつ
+    `degraded` に `no_impact_items: シードは解決できたが影響項目が 0 件`
+- `warn` ログも併せて出る（気付く経路を 2 つ持たせる）。
+
+### Note
+
+`no_files_analyzed` は今夜直した増分の不具合が再発したときの警報でもある。
+修正前の挙動（0 シンボルで SUCCEEDED）を二度と静かに通さない。
+
 ## 2026-11-19 — Dockerfile / nginx の静的検査
 
 ### Added
