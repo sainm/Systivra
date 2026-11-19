@@ -614,5 +614,7 @@
   "ontology.edit": "编辑",
   "ontology.update": "更新",
   "ontology.cancel": "取消",
-  "ontology.transitive": "传递"
+  "ontology.transitive": "传递",
+  "ontology.base": "基准版本",
+  "ontology.basedOn": "基于"
 }

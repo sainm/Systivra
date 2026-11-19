@@ -614,5 +614,7 @@
   "ontology.edit": "Edit",
   "ontology.update": "Update",
   "ontology.cancel": "Cancel",
-  "ontology.transitive": "Transitive"
+  "ontology.transitive": "Transitive",
+  "ontology.base": "Base version",
+  "ontology.basedOn": "Based on"
 }

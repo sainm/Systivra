@@ -48,6 +48,7 @@ export type TraceabilityResponse = Schemas["TraceabilityResponse"];
 export type OntologyEntityType = Schemas["OntologyEntityType"];
 export type OntologyRelationType = Schemas["OntologyRelationType"];
 export type OntologyResponse = Schemas["OntologyResponse"];
+export type OntologyVersionListResponse = Schemas["OntologyVersionListResponse"];
 export type GraphStatsResponse = Schemas["GraphStatsResponse"];
 export type GraphRebuildResponse = Schemas["GraphRebuildResponse"];
 export type PublishOntologyResponse = Schemas["PublishOntologyResponse"];

@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-11-19 — Ontology の草稿を任意の版から作れるようにした
+
+### Added
+
+- `POST /graph/ontology/drafts` に `base_version_id`（任意）。**DEPRECATED も基底にできる。**
+  省略時は従来どおり現在の公開版。
+- `GET /graph/ontology/versions`: 版の一覧（DRAFT を除く）。UI の基底選択に使う。
+- `migrations/033_ontology_based_on.sql`: `ontology_version.based_on`。
+  草稿が「何を元にしたか」を残す（記録が無いと後から説明できない）。
+- `OntologyResponse.based_on`。UI は編集中の版に「複製元: v1」を出す。
+
+### Verification
+
+- v1 を基底に草稿作成 → `based_on = v1`、56 型。
+- 草稿に `ExtraType` を足して公開（57 型・v1 は DEPRECATED）。
+  **その状態で v1 を基底に作り直すと 56 型で `ExtraType` を含まない**
+  （現在の公開版ではなく、指定した版のスナップショットから複製できている）。
+- 存在しない版を指定 → 400。
+- ブラウザ実測（1440px、pageerror 0）: 基底セレクトに `v1 (PUBLISHED)` が出て、
+  選ぶとチップに「複製元: v1」、行数 56。
+- 検証で作った版は削除し、公開版は v1 に戻した。
+
 ## 2026-11-19 — Ontology の行内編集
 
 ### Added

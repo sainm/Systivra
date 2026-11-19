@@ -1322,42 +1322,88 @@ impl Store {
     pub async fn ontology_draft(
         &self,
         tx: &mut Tx<'_>,
-    ) -> Result<Option<(Uuid, String)>, StoreError> {
+    ) -> Result<Option<(Uuid, String, Option<Uuid>)>, StoreError> {
         let row = sqlx::query(
-            "SELECT id, version FROM graph_meta.ontology_version
+            "SELECT id, version, based_on FROM graph_meta.ontology_version
               WHERE status = 'DRAFT'
               ORDER BY version DESC
               LIMIT 1",
         )
         .fetch_optional(&mut **tx)
         .await?;
-        Ok(row.map(|row| (row.get("id"), row.get("version"))))
+        Ok(row.map(|row| (row.get("id"), row.get("version"), row.get("based_on"))))
     }
 
-    /// 公開版を複製して DRAFT を作る。既に DRAFT があればそれを返す
+    /// 版の一覧（新しい順）。基底を選ばせるために使う。
+    pub async fn ontology_versions(
+        &self,
+        tx: &mut Tx<'_>,
+    ) -> Result<Vec<OntologyVersionRow>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT id, version, status, published_at FROM graph_meta.ontology_version
+              ORDER BY published_at DESC NULLS FIRST, version DESC",
+        )
+        .fetch_all(&mut **tx)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|row| OntologyVersionRow {
+                id: row.get("id"),
+                version: row.get("version"),
+                status: row.get("status"),
+                published_at: row.get("published_at"),
+            })
+            .collect())
+    }
+
+    /// 版が存在するか（`based_on` の妥当性確認に使う）。
+    pub async fn ontology_version_exists(
+        &self,
+        tx: &mut Tx<'_>,
+        version_id: Uuid,
+    ) -> Result<bool, StoreError> {
+        let found: Option<i32> =
+            sqlx::query_scalar("SELECT 1 FROM graph_meta.ontology_version WHERE id = $1")
+                .bind(version_id)
+                .fetch_optional(&mut **tx)
+                .await?;
+        Ok(found.is_some())
+    }
+
+    /// 版を複製して DRAFT を作る。既に DRAFT があればそれを返す
     /// （編集中の版を黙って作り直すと、作業中の変更が消える）。
+    ///
+    /// `base` を渡すとその版から複製する（DEPRECATED も可）。
+    /// 渡さなければ現在の公開版。
     pub async fn create_ontology_draft(
         &self,
         tx: &mut Tx<'_>,
         version: &str,
+        base: Option<Uuid>,
     ) -> Result<(Uuid, String), StoreError> {
-        if let Some(existing) = self.ontology_draft(tx).await? {
-            return Ok(existing);
+        if let Some((id, label, _based_on)) = self.ontology_draft(tx).await? {
+            return Ok((id, label));
         }
-        let source: Option<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM graph_meta.ontology_version
-              WHERE status = 'PUBLISHED'
-              ORDER BY published_at DESC NULLS LAST
-              LIMIT 1",
-        )
-        .fetch_optional(&mut **tx)
-        .await?;
+        let source: Option<Uuid> = match base {
+            Some(id) => Some(id),
+            None => {
+                sqlx::query_scalar(
+                    "SELECT id FROM graph_meta.ontology_version
+                  WHERE status = 'PUBLISHED'
+                  ORDER BY published_at DESC NULLS LAST
+                  LIMIT 1",
+                )
+                .fetch_optional(&mut **tx)
+                .await?
+            }
+        };
         let row = sqlx::query(
-            "INSERT INTO graph_meta.ontology_version (version, status)
-             VALUES ($1, 'DRAFT')
+            "INSERT INTO graph_meta.ontology_version (version, status, based_on)
+             VALUES ($1, 'DRAFT', $2)
              RETURNING id",
         )
         .bind(version)
+        .bind(source)
         .fetch_one(&mut **tx)
         .await?;
         let target: Uuid = row.get("id");
@@ -1727,4 +1773,13 @@ pub struct OntologyRelationTypeDraft {
     pub cardinality: String,
     pub is_transitive: bool,
     pub properties_schema: serde_json::Value,
+}
+
+/// 版一覧の 1 行。
+#[derive(Debug, Clone)]
+pub struct OntologyVersionRow {
+    pub id: Uuid,
+    pub version: String,
+    pub status: String,
+    pub published_at: Option<chrono::DateTime<chrono::Utc>>,
 }

@@ -1024,7 +1024,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 編集用の DRAFT を作る（既にあればそれを返す）。公開版は変わらない。 */
+        /**
+         * 編集用の DRAFT を作る（既にあればそれを返す）。公開版は変わらない。
+         *     `base_version_id` を渡すとその版から複製する（DEPRECATED も可）。
+         */
         post: operations["create_ontology_draft"];
         delete?: never;
         options?: never;
@@ -1111,6 +1114,23 @@ export interface paths {
         post?: never;
         /** DRAFT から関係型を削除する。 */
         delete: operations["delete_relation_type"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{pid}/graph/ontology/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 版の一覧（DRAFT を作るときの基底選択に使う）。 */
+        get: operations["ontology_versions"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -2086,6 +2106,13 @@ export interface components {
             mode?: string;
             question: string;
         };
+        CreateOntologyDraftRequest: {
+            /**
+             * Format: uuid
+             * @description 複製元の版 ID（DEPRECATED も可）。省略すると現在の公開版。
+             */
+            base_version_id?: string | null;
+        };
         CreateTestRunRequest: {
             environment: components["schemas"]["TestEnvironment"];
             name: string;
@@ -2990,6 +3017,11 @@ export interface components {
             target_types: string[];
         };
         OntologyResponse: {
+            /**
+             * Format: uuid
+             * @description この草稿を複製した元の版。初版や公開版では未設定。
+             */
+            based_on?: string | null;
             entity_types: components["schemas"]["OntologyEntityType"][];
             /**
              * Format: uuid
@@ -2999,6 +3031,17 @@ export interface components {
             /** Format: date-time */
             published_at?: string | null;
             relation_types: components["schemas"]["OntologyRelationType"][];
+            status: string;
+            version: string;
+        };
+        OntologyVersionListResponse: {
+            items: components["schemas"]["OntologyVersionSummary"][];
+        };
+        OntologyVersionSummary: {
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            published_at?: string | null;
             status: string;
             version: string;
         };
@@ -5644,7 +5687,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateOntologyDraftRequest"];
+            };
+        };
         responses: {
             200: {
                 headers: {
@@ -5652,6 +5699,14 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OntologyResponse"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             403: {
@@ -5834,6 +5889,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    ontology_versions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project ID */
+                pid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OntologyVersionListResponse"];
                 };
             };
         };

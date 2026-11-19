@@ -87,6 +87,9 @@ pub struct OntologyResponse {
     /// 版の ID。DRAFT を編集するときに使う（公開版では従来どおり未設定でもよい）。
     #[serde(default)]
     pub id: Option<Uuid>,
+    /// この草稿を複製した元の版。初版や公開版では未設定。
+    #[serde(default)]
+    pub based_on: Option<Uuid>,
     pub version: String,
     pub status: String,
     pub published_at: Option<DateTime<Utc>>,
@@ -112,7 +115,27 @@ pub struct GraphStatsResponse {
     pub last_build: Option<GraphBuildView>,
 }
 
-#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct OntologyVersionSummary {
+    pub id: Uuid,
+    pub version: String,
+    pub status: String,
+    pub published_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct OntologyVersionListResponse {
+    pub items: Vec<OntologyVersionSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct CreateOntologyDraftRequest {
+    /// 複製元の版 ID（DEPRECATED も可）。省略すると現在の公開版。
+    #[serde(default)]
+    pub base_version_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct PublishOntologyRequest {
     /// 新しく公開する版の名前。`draft=true` のときは無視される。
     pub version: String,

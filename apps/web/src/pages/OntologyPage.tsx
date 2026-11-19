@@ -4,6 +4,7 @@ import { AppShell } from "../components/AppShell";
 import { ErrorNotice } from "../components/ui";
 import {
   createOntologyDraft,
+  listOntologyVersions,
   deleteOntologyEntityType,
   deleteOntologyRelationType,
   getOntology,
@@ -11,7 +12,12 @@ import {
   upsertOntologyEntityType,
   upsertOntologyRelationType,
 } from "../lib/api";
-import type { Me, Membership, OntologyResponse } from "../lib/types";
+import type {
+  Me,
+  Membership,
+  OntologyResponse,
+  OntologyVersionListResponse,
+} from "../lib/types";
 import { useT } from "../i18n";
 
 export function OntologyPage({
@@ -42,6 +48,8 @@ export function OntologyPage({
   // 編集中の行。名前はキーなので変更させない（変えたいときは追加＋削除）。
   const [editingType, setEditingType] = useState<string | null>(null);
   const [editingRelation, setEditingRelation] = useState<string | null>(null);
+  const [versions, setVersions] = useState<OntologyVersionListResponse["items"]>([]);
+  const [baseVersion, setBaseVersion] = useState("");
 
   async function load() {
     try {
@@ -54,13 +62,19 @@ export function OntologyPage({
 
   useEffect(() => {
     void load();
+    // 基底にできる版を読む。DRAFT は除く（編集中の版を基底にはしない）。
+    void listOntologyVersions(pid)
+      .then((response) =>
+        setVersions(response.items.filter((item) => item.status !== "DRAFT")),
+      )
+      .catch(() => setVersions([]));
   }, [pid]);
 
   async function openDraft() {
     setBusy(true);
     setError(null);
     try {
-      setDraft(await createOntologyDraft(pid));
+      setDraft(await createOntologyDraft(pid, baseVersion || null));
     } catch (cause) {
       setError(cause);
     } finally {
@@ -254,6 +268,19 @@ export function OntologyPage({
           <button className="btn btn-primary" onClick={() => void publish()} disabled={busy}>
             {t("ontology.publish")}
           </button>
+          <select
+            className="input"
+            value={baseVersion}
+            onChange={(event) => setBaseVersion(event.target.value)}
+            title={t("ontology.base")}
+          >
+            <option value="">{t("ontology.base")}: {t("ontology.version")}</option>
+            {versions.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.version} ({item.status})
+              </option>
+            ))}
+          </select>
           <button className="btn btn-sm" onClick={() => void openDraft()} disabled={busy}>
             {t("ontology.editDraft")}
           </button>
@@ -265,6 +292,13 @@ export function OntologyPage({
               <span className="chip chip-warn">
                 {t("ontology.draft")}: {draft.version}
               </span>
+              {draft.based_on ? (
+                <span className="chip">
+                  {t("ontology.basedOn")}:{" "}
+                  {versions.find((item) => item.id === draft.based_on)?.version ??
+                    draft.based_on.slice(0, 8)}
+                </span>
+              ) : null}
               <button className="btn btn-primary btn-sm" onClick={() => void publishDraft()} disabled={busy}>
                 {t("ontology.publishDraft")}
               </button>

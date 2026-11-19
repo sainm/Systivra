@@ -33,6 +33,7 @@ impl App {
             .map_err(|e| AppError::Validation(e.to_string()))?;
         Ok(OntologyResponse {
             id: None,
+            based_on: None,
             version: row.version,
             status: row.status,
             published_at: row.published_at,
@@ -250,18 +251,33 @@ impl App {
         &self,
         auth: &Authenticated,
         project: ProjectId,
+        base_version_id: Option<Uuid>,
     ) -> Result<contracts::OntologyResponse, AppError> {
         self.require_ontology_write(auth, project).await?;
         let mut tx = self.store().begin_scoped(project).await?;
+        if let Some(base) = base_version_id {
+            if !self.store().ontology_version_exists(&mut tx, base).await? {
+                return Err(AppError::Validation(format!(
+                    "複製元の版がありません: {base}"
+                )));
+            }
+        }
         let version = format!("draft-{}", Utc::now().format("%Y%m%d%H%M%S"));
         let (id, label) = self
             .store()
-            .create_ontology_draft(&mut tx, &version)
+            .create_ontology_draft(&mut tx, &version, base_version_id)
             .await?;
+        // 複製元は store が決める（base 指定が無ければ公開版）ので、読み戻して返す。
+        let based_on = self
+            .store()
+            .ontology_draft(&mut tx)
+            .await?
+            .and_then(|(_, _, based_on)| based_on);
         let (entity_types, relation_types) = self.store().ontology_types(&mut tx, id).await?;
         store::commit(tx).await?;
         Ok(contracts::OntologyResponse {
             id: Some(id),
+            based_on,
             version: label,
             status: "DRAFT".into(),
             published_at: None,
@@ -269,6 +285,29 @@ impl App {
                 .map_err(|error| AppError::Validation(error.to_string()))?,
             relation_types: serde_json::from_value(relation_types)
                 .map_err(|error| AppError::Validation(error.to_string()))?,
+        })
+    }
+
+    /// 版の一覧（基底を選ばせるため）。
+    pub async fn ontology_versions(
+        &self,
+        auth: &Authenticated,
+        project: ProjectId,
+    ) -> Result<contracts::OntologyVersionListResponse, AppError> {
+        self.require_graph_read(auth, project).await?;
+        let mut tx = self.store().begin_scoped(project).await?;
+        let rows = self.store().ontology_versions(&mut tx).await?;
+        store::commit(tx).await?;
+        Ok(contracts::OntologyVersionListResponse {
+            items: rows
+                .into_iter()
+                .map(|row| contracts::OntologyVersionSummary {
+                    id: row.id,
+                    version: row.version,
+                    status: row.status,
+                    published_at: row.published_at,
+                })
+                .collect(),
         })
     }
 
@@ -280,13 +319,14 @@ impl App {
     ) -> Result<contracts::OntologyResponse, AppError> {
         self.require_graph_read(auth, project).await?;
         let mut tx = self.store().begin_scoped(project).await?;
-        let Some((id, label)) = self.store().ontology_draft(&mut tx).await? else {
+        let Some((id, label, based_on)) = self.store().ontology_draft(&mut tx).await? else {
             return Err(AppError::NotFound(ErrorCode::NotFound));
         };
         let (entity_types, relation_types) = self.store().ontology_types(&mut tx, id).await?;
         store::commit(tx).await?;
         Ok(contracts::OntologyResponse {
             id: Some(id),
+            based_on,
             version: label,
             status: "DRAFT".into(),
             published_at: None,
@@ -306,7 +346,8 @@ impl App {
     ) -> Result<contracts::OntologyResponse, AppError> {
         self.require_ontology_write(auth, project).await?;
         let mut tx = self.store().begin_scoped(project).await?;
-        let Some((version_id, _label)) = self.store().ontology_draft(&mut tx).await? else {
+        let Some((version_id, _label, _based_on)) = self.store().ontology_draft(&mut tx).await?
+        else {
             return Err(AppError::Validation(
                 "編集中の版がありません。先に DRAFT を作ってください".into(),
             ));
@@ -335,6 +376,7 @@ impl App {
         let _ = relations;
         Ok(contracts::OntologyResponse {
             id: Some(version_id),
+            based_on: _based_on,
             version: _label,
             status: "DRAFT".into(),
             published_at: None,
@@ -354,7 +396,8 @@ impl App {
     ) -> Result<contracts::OntologyResponse, AppError> {
         self.require_ontology_write(auth, project).await?;
         let mut tx = self.store().begin_scoped(project).await?;
-        let Some((version_id, label)) = self.store().ontology_draft(&mut tx).await? else {
+        let Some((version_id, label, _based_on)) = self.store().ontology_draft(&mut tx).await?
+        else {
             return Err(AppError::Validation(
                 "編集中の版がありません。先に DRAFT を作ってください".into(),
             ));
@@ -399,6 +442,7 @@ impl App {
         store::commit(tx).await?;
         Ok(contracts::OntologyResponse {
             id: Some(version_id),
+            based_on: _based_on,
             version: label,
             status: "DRAFT".into(),
             published_at: None,
@@ -418,7 +462,8 @@ impl App {
     ) -> Result<contracts::OntologyResponse, AppError> {
         self.require_ontology_write(auth, project).await?;
         let mut tx = self.store().begin_scoped(project).await?;
-        let Some((version_id, label)) = self.store().ontology_draft(&mut tx).await? else {
+        let Some((version_id, label, _based_on)) = self.store().ontology_draft(&mut tx).await?
+        else {
             return Err(AppError::Validation(
                 "編集中の版がありません。先に DRAFT を作ってください".into(),
             ));
@@ -447,6 +492,7 @@ impl App {
         store::commit(tx).await?;
         Ok(contracts::OntologyResponse {
             id: Some(version_id),
+            based_on: _based_on,
             version: label,
             status: "DRAFT".into(),
             published_at: None,
@@ -466,7 +512,8 @@ impl App {
     ) -> Result<contracts::OntologyResponse, AppError> {
         self.require_ontology_write(auth, project).await?;
         let mut tx = self.store().begin_scoped(project).await?;
-        let Some((version_id, label)) = self.store().ontology_draft(&mut tx).await? else {
+        let Some((version_id, label, _based_on)) = self.store().ontology_draft(&mut tx).await?
+        else {
             return Err(AppError::Validation(
                 "編集中の版がありません。先に DRAFT を作ってください".into(),
             ));
@@ -484,6 +531,7 @@ impl App {
         store::commit(tx).await?;
         Ok(contracts::OntologyResponse {
             id: Some(version_id),
+            based_on: _based_on,
             version: label,
             status: "DRAFT".into(),
             published_at: None,
@@ -526,7 +574,8 @@ impl App {
         let mut tx = self.store().begin_scoped(project).await?;
         if draft {
             // 編集した DRAFT をそのまま公開する（型編集の成果を反映）。
-            let Some((version_id, label)) = self.store().ontology_draft(&mut tx).await? else {
+            let Some((version_id, label, _based_on)) = self.store().ontology_draft(&mut tx).await?
+            else {
                 return Err(AppError::Validation("編集中の版がありません".into()));
             };
             let (entity_types, relation_types) =

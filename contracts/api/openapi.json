@@ -3271,7 +3271,7 @@
         "tags": [
           "crate::routes::graph"
         ],
-        "summary": "編集用の DRAFT を作る（既にあればそれを返す）。公開版は変わらない。",
+        "summary": "編集用の DRAFT を作る（既にあればそれを返す）。公開版は変わらない。\n`base_version_id` を渡すとその版から複製する（DEPRECATED も可）。",
         "operationId": "create_ontology_draft",
         "parameters": [
           {
@@ -3285,6 +3285,16 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateOntologyDraftRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "",
@@ -3292,6 +3302,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/OntologyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -3574,6 +3594,39 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{pid}/graph/ontology/versions": {
+      "get": {
+        "tags": [
+          "crate::routes::graph"
+        ],
+        "summary": "版の一覧（DRAFT を作るときの基底選択に使う）。",
+        "operationId": "ontology_versions",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OntologyVersionListResponse"
                 }
               }
             }
@@ -6837,6 +6890,19 @@
           }
         }
       },
+      "CreateOntologyDraftRequest": {
+        "type": "object",
+        "properties": {
+          "base_version_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "複製元の版 ID（DEPRECATED も可）。省略すると現在の公開版。"
+          }
+        }
+      },
       "CreateTestRunRequest": {
         "type": "object",
         "required": [
@@ -10013,6 +10079,14 @@
           "relation_types"
         ],
         "properties": {
+          "based_on": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "この草稿を複製した元の版。初版や公開版では未設定。"
+          },
           "entity_types": {
             "type": "array",
             "items": {
@@ -10039,6 +10113,47 @@
             "items": {
               "$ref": "#/components/schemas/OntologyRelationType"
             }
+          },
+          "status": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "OntologyVersionListResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OntologyVersionSummary"
+            }
+          }
+        }
+      },
+      "OntologyVersionSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "version",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "published_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           },
           "status": {
             "type": "string"

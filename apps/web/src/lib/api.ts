@@ -60,6 +60,7 @@ import type {
   OntologyEntityType,
   OntologyRelationType,
   OntologyResponse,
+  OntologyVersionListResponse,
   ParseAcceptedResponse,
   Problem,
   PublishOntologyResponse,
@@ -366,9 +367,21 @@ export function publishOntology(
   });
 }
 
-export function createOntologyDraft(projectId: string): Promise<OntologyResponse> {
+export function listOntologyVersions(
+  projectId: string,
+): Promise<OntologyVersionListResponse> {
+  return request<OntologyVersionListResponse>(
+    `/projects/${projectId}/graph/ontology/versions`,
+  );
+}
+
+export function createOntologyDraft(
+  projectId: string,
+  baseVersionId?: string | null,
+): Promise<OntologyResponse> {
   return request<OntologyResponse>(`/projects/${projectId}/graph/ontology/drafts`, {
     method: "POST",
+    body: { base_version_id: baseVersionId ?? null },
   });
 }
 

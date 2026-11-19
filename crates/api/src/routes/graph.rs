@@ -5,11 +5,12 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use contracts::{
-    ErrorCode, GraphEntityQuery, GraphEntitySearchResponse, GraphNeighborsQuery,
-    GraphNeighborsResponse, GraphPathQuery, GraphPathResponse, GraphRebuildAbortResponse,
-    GraphRebuildResponse, GraphStatsResponse, GraphSubgraphQuery, GraphSubgraphResponse,
-    GraphTraceabilityQuery, OntologyEntityType, OntologyRelationType, OntologyResponse,
-    PublishOntologyRequest, PublishOntologyResponse, TraceabilityResponse,
+    CreateOntologyDraftRequest, ErrorCode, GraphEntityQuery, GraphEntitySearchResponse,
+    GraphNeighborsQuery, GraphNeighborsResponse, GraphPathQuery, GraphPathResponse,
+    GraphRebuildAbortResponse, GraphRebuildResponse, GraphStatsResponse, GraphSubgraphQuery,
+    GraphSubgraphResponse, GraphTraceabilityQuery, OntologyEntityType, OntologyRelationType,
+    OntologyResponse, OntologyVersionListResponse, PublishOntologyRequest, PublishOntologyResponse,
+    TraceabilityResponse,
 };
 use uuid::Uuid;
 
@@ -28,6 +29,10 @@ pub fn router() -> Router<ApiState> {
         .route(
             "/api/v1/projects/{pid}/graph/ontology/draft",
             get(ontology_draft),
+        )
+        .route(
+            "/api/v1/projects/{pid}/graph/ontology/versions",
+            get(ontology_versions),
         )
         .route(
             "/api/v1/projects/{pid}/graph/ontology/entity-types",
@@ -92,21 +97,26 @@ pub(crate) async fn ontology(
     post,
     path = "/api/v1/projects/{pid}/graph/ontology/drafts",
     params(("pid" = uuid::Uuid, Path, description = "Project ID")),
+    request_body = CreateOntologyDraftRequest,
     responses(
         (status = 200, body = OntologyResponse),
+        (status = 400, body = contracts::Problem),
         (status = 403, body = contracts::Problem)
     )
 )]
 /// 編集用の DRAFT を作る（既にあればそれを返す）。公開版は変わらない。
+/// `base_version_id` を渡すとその版から複製する（DEPRECATED も可）。
 pub(crate) async fn create_ontology_draft(
     State(state): State<ApiState>,
     scope: ProjectScope,
     Extension(trace): Extension<TraceId>,
     Extension(auth): Extension<Authenticated>,
+    body: Option<Json<CreateOntologyDraftRequest>>,
 ) -> Result<Json<OntologyResponse>, ApiError> {
+    let base = body.and_then(|Json(request)| request.base_version_id);
     let response = state
         .app
-        .ensure_ontology_draft(&auth, scope.project)
+        .ensure_ontology_draft(&auth, scope.project, base)
         .await
         .map_err(|error| ApiError::from_app(error, &trace))?;
     Ok(Json(response))
@@ -131,6 +141,27 @@ pub(crate) async fn ontology_draft(
     let response = state
         .app
         .ontology_draft(&auth, scope.project)
+        .await
+        .map_err(|error| ApiError::from_app(error, &trace))?;
+    Ok(Json(response))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{pid}/graph/ontology/versions",
+    params(("pid" = uuid::Uuid, Path, description = "Project ID")),
+    responses((status = 200, body = OntologyVersionListResponse))
+)]
+/// 版の一覧（DRAFT を作るときの基底選択に使う）。
+pub(crate) async fn ontology_versions(
+    State(state): State<ApiState>,
+    scope: ProjectScope,
+    Extension(trace): Extension<TraceId>,
+    Extension(auth): Extension<Authenticated>,
+) -> Result<Json<OntologyVersionListResponse>, ApiError> {
+    let response = state
+        .app
+        .ontology_versions(&auth, scope.project)
         .await
         .map_err(|error| ApiError::from_app(error, &trace))?;
     Ok(Json(response))

@@ -614,5 +614,7 @@
   "ontology.edit": "編集",
   "ontology.update": "更新",
   "ontology.cancel": "取消",
-  "ontology.transitive": "推移的"
+  "ontology.transitive": "推移的",
+  "ontology.base": "複製元の版",
+  "ontology.basedOn": "複製元"
 }
