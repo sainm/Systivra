@@ -168,6 +168,7 @@ cd apps/web && npm run check:ui:phase5-inquiry             # 問い合わせ 5 �
 python3 scripts/phase6-runner-eval.py                     # SAMPLE 站点 + 100 ケース 4 並列の実測（要 API + worker + Chrome）
 SYSTIVRA_PDF_FONT=/path/to/NotoSansJP-Regular.ttf \
   python3 scripts/phase5-inquiry-eval.py                  # Q-01 SSE / 曖昧停止 / Markdown / PDF（要 API + worker）
+python3 scripts/rag-seed-doc-eval.py                      # 文書 → コード実体のシード解決（要 API + worker・cupsfilter）
 python3 scripts/phase6-test-eval.py                       # ルール / 派生 / 承認 / 環境ロック / 被覆 / 欠陥（要 API + worker）
 python3 scripts/phase7-eval.py                            # Agent / MCP 12 ツール / Workflow 承認 / 監査（要 API + worker）
 python3 scripts/phase7-agent-loop-eval.py                 # ツール呼び出しループ（独立 DB + mock LLM。既存サービスに触れない）

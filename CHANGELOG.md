@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-11-19 — RAG シードの端到端受入（文書 → コード実体）
+
+### Added
+
+- `scripts/rag-seed-doc-eval.py`: 設計書 PDF を取り込み、**実体名を含まない**
+  言い換え質問からシードが解決されることを通しで検証する。文書は最後に削除する
+  （コーパスを汚すと他の受入の検索結果が変わるため）。
+- PDF は `cupsfilter`（macOS 標準）でテキストから生成する。外部フォント不要。
+
+### Verified
+
+```
+question      : 挨拶を組み立てる処理はどこにありますか   （"Hello" を含まない）
+first_status  : NEEDS_CLARIFICATION                     （候補 3 件・確度 0.55）
+candidates    : jsp / Caller / Hello
+Hello を選択  : impact items = 12〜13
+```
+
+- 文書だけの DB では候補 0 件（`NOT_FOUND_SEED`）になることも確認済み。
+  Document をシードにすると「成功だが影響 0 件」になるため、実体抽出に切り替えた
+  判断が正しかったことが、この受入で裏付けられた。
+
 ## 2026-11-19 — Ontology の関係型編集
 
 ### Added
