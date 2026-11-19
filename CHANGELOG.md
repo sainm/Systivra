@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-11-19 — docker compose の DB 初期化を「列挙」から「走査」へ
+
+### Fixed
+
+`docker-compose.yml` が `docker-entrypoint-initdb.d` へマイグレーションを
+**1 ファイルずつ列挙**していた。列挙は 030 で止まっており、**031 / 032 / 033 が
+抜けていた** — `docker compose up` した DB だけ `cancel_requested_at` も
+`schema_migration` も `based_on` も無い状態になる（手元の検証 DB では
+気付けない種類の事故）。
+
+- `./migrations:/migrations:ro` をマウントし、`deployment/postgres/init/10-apply-migrations.sh`
+  が `*.sql` をファイル名順に全部当てる。追加時に compose を編集しなくてよい。
+- `roles.sql` は従来どおり最後（`90_roles.sql`）。
+
+### Added
+
+- `scripts/check-compose.sh`: デーモン不要の静的検査。
+  - バインドマウントの元パスが存在するか
+  - **マイグレーションを列挙していないか**（再発防止の本体）
+  - init スクリプトが `*.sql` を走査しているか／実行可能か
+  - `dockerfile:` のパス、必須の環境変数
+- 検査が**実際に落ちること**も確認（列挙を 1 行足すと FAIL になる）。
+
+### Verification
+
+- `MIGRATIONS_DIR=<repo>/migrations PGDATABASE=<temp> 10-apply-migrations.sh`
+  → 32 件適用。`cancel_requested_at` / `core.schema_migration` / `based_on` の
+  存在を SQL で確認。`roles.sql` 適用後に `scheduler_scope` ポリシー 4 件。
+- `scripts/check-compose.sh` → 全て通過。
+
+### Note
+
+Docker デーモンが無い環境だったため、**イメージのビルドと `compose up` 自体は
+未検証**。今回潰したのは「起動時に必ず踏む DB 初期化」の経路。
+
 ## 2026-11-19 — 既存の縦断受入を通し、実際に 2 件のバグを直した
 
 Phase 5（問詢）/ 6（テスト）/ 7（Agent・MCP・Workflow）を通しで実行した。

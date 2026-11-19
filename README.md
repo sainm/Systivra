@@ -143,11 +143,12 @@ db / api / worker / web を起動し、コンテナ経由の E2E まで通して
 
 ```bash
 cargo test --workspace
-PGHOST=localhost ./scripts/verify-db.sh   # 空 DB に 001〜032 を適用して RLS / 分区 / graph / code / impact / test / ai / inquiry / sso / session / scim / 投影運用 / Enterprise 残件 / ジョブ取消を確認
+./scripts/check-compose.sh                            # compose の静的検査（デーモン不要）
+PGHOST=localhost ./scripts/verify-db.sh   # 空 DB に 001〜033 を適用して RLS / 分区 / graph / code / impact / test / ai / inquiry / sso / session / scim / 投影運用 / Enterprise 残件 / ジョブ取消を確認
 
 各 phase の受入表に書かれた `001〜0xx` や i18n キー数・ツール実行本数は、
 その phase を検証した時点の値（履歴）である。現行の `scripts/verify-db.sh` は
-**001〜032** を順に適用し、i18n は 609 キー。現行値は
+**001〜033** を順に適用し、i18n は 626 キー。現行値は
 [`docs/phase7/acceptance.md`](docs/phase7/acceptance.md) の §1・§2 を正本とする。
 cargo run -p api --bin openapi -- --check                 # 生成 spec とコミット済み spec の一致
 cd apps/web && npm ci && npm run check:i18n && npm run build

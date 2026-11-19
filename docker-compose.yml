@@ -18,35 +18,11 @@ services:
       # 初回起動時だけ流れる。順序はファイル名順。
       # **roles.sql は必ず最後**：schema が無いと USAGE を付与できず、
       # 先に流すと「permission denied for schema core」で全 API が 500 になる。
-      - ./migrations/001_core.sql:/docker-entrypoint-initdb.d/10_001_core.sql:ro
-      - ./migrations/002_core_ops.sql:/docker-entrypoint-initdb.d/11_002_core_ops.sql:ro
-      - ./migrations/003_authz.sql:/docker-entrypoint-initdb.d/12_003_authz.sql:ro
-      - ./migrations/004_corpus_document.sql:/docker-entrypoint-initdb.d/13_004_corpus_document.sql:ro
-      - ./migrations/005_corpus_chunk.sql:/docker-entrypoint-initdb.d/14_005_corpus_chunk.sql:ro
-      - ./migrations/006_corpus_evidence.sql:/docker-entrypoint-initdb.d/15_006_corpus_evidence.sql:ro
-      - ./migrations/007_job_events.sql:/docker-entrypoint-initdb.d/16_007_job_events.sql:ro
-      - ./migrations/008_project_of.sql:/docker-entrypoint-initdb.d/17_008_project_of.sql:ro
-      - ./migrations/009_rename_corpus.sql:/docker-entrypoint-initdb.d/18_009_rename_corpus.sql:ro
-      - ./migrations/010_index_build_active.sql:/docker-entrypoint-initdb.d/19_010_index_build_active.sql:ro
-      - ./migrations/011_graph.sql:/docker-entrypoint-initdb.d/20_011_graph.sql:ro
-      - ./migrations/012_graph_relationship_seq.sql:/docker-entrypoint-initdb.d/21_012_graph_relationship_seq.sql:ro
-      - ./migrations/013_code.sql:/docker-entrypoint-initdb.d/22_013_code.sql:ro
-      - ./migrations/014_impact.sql:/docker-entrypoint-initdb.d/23_014_impact.sql:ro
-      - ./migrations/015_test.sql:/docker-entrypoint-initdb.d/24_015_test.sql:ro
-      - ./migrations/016_ai.sql:/docker-entrypoint-initdb.d/25_016_ai.sql:ro
-      - ./migrations/017_inquiry.sql:/docker-entrypoint-initdb.d/26_017_inquiry.sql:ro
-      - ./migrations/018_sso.sql:/docker-entrypoint-initdb.d/27_018_sso.sql:ro
-      - ./migrations/019_session.sql:/docker-entrypoint-initdb.d/28_019_session.sql:ro
-      - ./migrations/021_session_identity.sql:/docker-entrypoint-initdb.d/29_021_session_identity.sql:ro
-      - ./migrations/022_scim.sql:/docker-entrypoint-initdb.d/30_022_scim.sql:ro
-      - ./migrations/023_first_project.sql:/docker-entrypoint-initdb.d/31_023_first_project.sql:ro
-      - ./migrations/024_code_schema_repair.sql:/docker-entrypoint-initdb.d/32_024_code_schema_repair.sql:ro
-      - ./migrations/025_mcp_client.sql:/docker-entrypoint-initdb.d/33_025_mcp_client.sql:ro
-      - ./migrations/026_workflow_actor.sql:/docker-entrypoint-initdb.d/34_026_workflow_actor.sql:ro
-      - ./migrations/027_approval_consume.sql:/docker-entrypoint-initdb.d/35_027_approval_consume.sql:ro
-      - ./migrations/028_graph_projection_ops.sql:/docker-entrypoint-initdb.d/36_028_graph_projection_ops.sql:ro
-      - ./migrations/029_enterprise_ops.sql:/docker-entrypoint-initdb.d/37_029_enterprise_ops.sql:ro
-      - ./migrations/030_audit_retention.sql:/docker-entrypoint-initdb.d/38_030_audit_retention.sql:ro
+      # **列挙しない。** ディレクトリごと渡して init スクリプトが順に流す。
+      # 列挙は必ず漏れる（実際 031〜033 が漏れて、コンテナの DB だけ列が
+      # 足りない状態になっていた）。
+      - ./migrations:/migrations:ro
+      - ./deployment/postgres/init/10-apply-migrations.sh:/docker-entrypoint-initdb.d/10-apply-migrations.sh:ro
       - ./deployment/postgres/roles.sql:/docker-entrypoint-initdb.d/90_roles.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d systivra"]
