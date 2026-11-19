@@ -143,11 +143,11 @@ db / api / worker / web を起動し、コンテナ経由の E2E まで通して
 
 ```bash
 cargo test --workspace
-PGHOST=localhost PGUSER=postgres ./scripts/verify-db.sh   # 空 DB に 001〜029 を適用して RLS / 分区 / graph / code / impact / test / ai / inquiry / sso / session / scim / 投影運用 / Enterprise 残件を確認
+PGHOST=localhost ./scripts/verify-db.sh   # 空 DB に 001〜032 を適用して RLS / 分区 / graph / code / impact / test / ai / inquiry / sso / session / scim / 投影運用 / Enterprise 残件 / ジョブ取消を確認
 
 各 phase の受入表に書かれた `001〜0xx` や i18n キー数・ツール実行本数は、
 その phase を検証した時点の値（履歴）である。現行の `scripts/verify-db.sh` は
-**001〜029** を順に適用し、i18n は 583 キー。現行値は
+**001〜032** を順に適用し、i18n は 609 キー。現行値は
 [`docs/phase7/acceptance.md`](docs/phase7/acceptance.md) の §1・§2 を正本とする。
 cargo run -p api --bin openapi -- --check                 # 生成 spec とコミット済み spec の一致
 cd apps/web && npm ci && npm run check:i18n && npm run build
@@ -171,6 +171,7 @@ SYSTIVRA_PDF_FONT=/path/to/NotoSansJP-Regular.ttf \
 python3 scripts/phase6-test-eval.py                       # ルール / 派生 / 承認 / 環境ロック / 被覆 / 欠陥（要 API + worker）
 python3 scripts/phase7-eval.py                            # Agent / MCP 12 ツール / Workflow 承認 / 監査（要 API + worker）
 python3 scripts/phase7-agent-loop-eval.py                 # ツール呼び出しループ（独立 DB + mock LLM。既存サービスに触れない）
+python3 scripts/job-cancel-eval.py                        # ジョブ / Agent run 取消（独立 DB + mock LLM + UI 1440/607）
 cargo test -p engine-test --test golden_phase6            # 合成 300 ルール → 900 組以上のデータ
 cd apps/web && npm run check:ui:phase6                     # テスト工学画面（要 API + Vite）
 cd apps/web && npm run check:ui:phase7                     # AI / MCP / Workflow 画面（要 API + Vite）
@@ -182,6 +183,7 @@ python3 scripts/phase8-sso-eval.py                         # SSO / back-channel 
 ./scripts/phase8-siem-eval.sh
 scripts/scheduler-rls-eval.py scheduler の NOBYPASSRLS 下でのジョブ・保守処理の受入                              # 監査 NDJSON の SIEM 転送とカーソル
 cd apps/web && npm run check:ui:phase8                     # ログイン / セキュリティ / ユーザー（要 API + Vite）
+cd apps/web && npm run check:ui:cancel                     # 解析 / Agent run の取消ボタン（job-cancel-eval が起動）
 ```
 
 ### ローカル起動
@@ -189,8 +191,11 @@ cd apps/web && npm run check:ui:phase8                     # ログイン / セ�
 ```bash
 # DB（pgvector が必要）
 createdb systivra
-for f in migrations/0*.sql; do psql -d systivra -v ON_ERROR_STOP=1 -f "$f"; done
+./scripts/migrate-catchup.sh systivra     # 未適用のマイグレーションだけ当てる
 psql -d systivra -f deployment/postgres/roles.sql
+
+# 既に使っている DB を最新へ（作り直さずに追いつかせる）
+./scripts/migrate-catchup.sh systivra
 ./scripts/seed-dev.sh          # alice / SystivraDemo1!（開発専用）
 
 # API（Vite の proxy 先は 18080）
@@ -227,7 +232,7 @@ Azure の PG16 / PG15 どちらでも動く。
 crates/                    13 crate（domain / contracts / store / providers /
                            engine-rag / engine-graph / engine-code / engine-impact /
                            engine-test / runtime / app / api / worker）
-migrations/                001〜029（core / corpus / job_event / project_of / index_build / graph / code / impact / test / ai / inquiry / sso / session / scim / code repair / 投影運用 / Enterprise 残件）
+migrations/                001〜032（core / corpus / job_event / project_of / index_build / graph / code / impact / test / ai / inquiry / sso / session / scim / code repair / 投影運用 / Enterprise 残件 / ジョブ取消 / 適用済み台帳）
 deployment/postgres/       roles.sql（3 ロール + 権限。冪等）
 deployment/docker/         API / worker の Dockerfile
 apps/web/                  Vite + React + Tailwind。Dockerfile は nginx 配信
@@ -258,9 +263,11 @@ scripts/phase6-graph-eval.py TestCase -[:VERIFIES]-> Requirement の outbox → 
 workers/runner/runner.test.mjs Runner 単体テスト（CI の runner ジョブ）
 scripts/phase7-agent-loop-eval.py Agent ツール呼び出し + Q-01 推定層 / schema 境界の E2E
 scripts/phase7-mcp-eval.py  外部 MCP stdio / HTTP / Schema 変化 / 失敗境界の E2E
+scripts/job-cancel-eval.py  QUEUED 即時 / RUNNING 協調停止 / 終態 409 / 冪等 / 権限 / 監査 / SSE / stalled 非復活 / Agent 取消の E2E
 apps/web/scripts/e2e.mjs   ログイン → 取込 → 解析 → 検索 → 原文ハイライトのブラウザ受入
 apps/web/scripts/ui-check-phase2.mjs  Explorer / 索引管理 / 検索検査のブラウザ受入
 apps/web/scripts/ui-check-phase2-revisions.mjs 改版履歴 / 切替のブラウザ受入
+apps/web/scripts/ui-check-cancel.mjs 解析 / Agent run 取消のブラウザ受入（1440 / 607）
 apps/web/scripts/ui-check-phase3.mjs  グラフ / Ontology / 公開のブラウザ受入
 apps/web/scripts/ui-check-phase3-ops.mjs グラフ完全性 / 再構築状態のブラウザ受入
 apps/web/scripts/ui-check-phase4.mjs  コード解析 / 品質警告 / Fact evidence のブラウザ受入

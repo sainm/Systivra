@@ -39,62 +39,20 @@ export PGDATABASE="$DB"
 
 say "== 適用 =="
 # 順序が重要：schema を作ってから権限を付ける。
-psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/001_core.sql"
-ok "001_core.sql"
-psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/002_core_ops.sql"
-ok "002_core_ops.sql"
-psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/003_authz.sql"
-ok "003_authz.sql"
-psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/004_corpus_document.sql"
-ok "004_corpus_document.sql"
-psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/005_corpus_chunk.sql"
-ok "005_corpus_chunk.sql"
-psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/006_corpus_evidence.sql"
-ok "006_corpus_evidence.sql"
-psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/007_job_events.sql"
-ok "007_job_events.sql"
-psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/008_project_of.sql"
-ok "008_project_of.sql"
-psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/009_rename_corpus.sql"
-ok "009_rename_corpus.sql"
-psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/010_index_build_active.sql"
-ok "010_index_build_active.sql"
-psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/011_graph.sql"
-ok "011_graph.sql"
-psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/012_graph_relationship_seq.sql"
-ok "012_graph_relationship_seq.sql"
-psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/013_code.sql"
-ok "013_code.sql"
-psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/014_impact.sql"
-ok "014_impact.sql"
-psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/015_test.sql"
-ok "015_test.sql"
-psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/016_ai.sql"
-ok "016_ai.sql"
-psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/017_inquiry.sql"
-ok "017_inquiry.sql"
-psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/018_sso.sql"
-ok "018_sso.sql"
-psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/019_session.sql"
-ok "019_session.sql"
-psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/021_session_identity.sql"
-ok "021_session_identity.sql"
-psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/022_scim.sql"
-ok "022_scim.sql"
-psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/023_first_project.sql"
-ok "023_first_project.sql"
-psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/024_code_schema_repair.sql"
-ok "024_code_schema_repair.sql"
-psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/025_mcp_client.sql"
-ok "025_mcp_client.sql"
-psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/026_workflow_actor.sql"
-ok "026_workflow_actor.sql"
-psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/027_approval_consume.sql"
-ok "027_approval_consume.sql"
-psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/028_graph_projection_ops.sql"
-ok "028_graph_projection_ops.sql"
-psql -v ON_ERROR_STOP=1 -q -f "$ROOT/migrations/029_enterprise_ops.sql"
-ok "029_enterprise_ops.sql"
+# **明示列挙しない。** 列挙は「追加し忘れ」を生む（実際 028 / 029 が漏れ、
+# CI がその表を作らないまま緑になっていた）。ファイル名順に全部流す。
+for migration in "$ROOT"/migrations/*.sql; do
+  psql -v ON_ERROR_STOP=1 -q -f "$migration"
+  ok "$(basename "$migration")"
+done
+# どのファイルを当てたか記録する（既存 DB を追いつかせるための台帳）。
+# 032 で表ができるので、記録は最後にまとめて行う。
+for migration in "$ROOT"/migrations/*.sql; do
+  psql -q -c "INSERT INTO core.schema_migration (filename)
+              VALUES ('$(basename "$migration")')
+              ON CONFLICT (filename) DO NOTHING;"
+done
+ok "schema_migration に $(ls "$ROOT"/migrations/*.sql | wc -l | tr -d ' ') 件を記録"
 psql -v ON_ERROR_STOP=1 -q -f "$ROOT/deployment/postgres/roles.sql"
 ok "roles.sql（migrations の後）"
 
@@ -176,6 +134,17 @@ got=$(psql -U systivra_scheduler -tA -c \
   "SELECT string_agg(priority::text, ',') FROM (SELECT priority FROM core.job WHERE status='QUEUED' ORDER BY priority DESC, created_at FOR UPDATE SKIP LOCKED) t;" | tail -1)
 [ "$got" = "9,5,1" ] && ok "priority DESC で取り出せる（9,5,1）" || no "取り出し順が違う（${got:-空}）"
 
+say "== ジョブ取消 =="
+JID=$(psql -tAc "SELECT id FROM core.job WHERE idempotency_key='k1';" | tr -d ' ')
+n=$(psql -U systivra_app -tA -c "SET app.project_id='$PID'; SELECT core.request_job_cancel('$JID');" | tail -1)
+[ "$n" = "IMMEDIATE" ] && ok "app は関数経由で QUEUED を即時取消できる" || no "取消関数の結果が違う（${n:-空}）"
+n=$(psql -U systivra_app -tA -c "SET app.project_id='00000000-0000-4000-8000-000000000000'; SELECT core.request_job_cancel('$JID');" | tail -1)
+[ "$n" = "NOT_FOUND" ] && ok "取消関数は他プロジェクトの job を触らない" || no "取消関数が越境した（${n:-空}）"
+n=$(psql -U systivra_app -tA -c "SET app.project_id='$PID'; SELECT core.request_job_cancel('$JID');" | tail -1)
+[ "$n" = "ALREADY_CANCELLED" ] && ok "取消済みへの再取消は冪等" || no "再取消の結果が違う（${n:-空}）"
+n=$(psql -U systivra_worker -tA -c "SELECT has_function_privilege('systivra_worker','core.request_job_cancel(uuid)','EXECUTE');" | tail -1)
+[ "$n" = "f" ] && ok "取消関数は app だけが実行できる" || no "worker が取消関数を実行できてしまう"
+
 say "== corpus 分区・索引 =="
 n=$(psql -tAc "SELECT count(*) FROM pg_inherits WHERE inhparent='corpus.chunk'::regclass;")
 [ "$n" = "32" ] && ok "chunk は 32 分区" || no "chunk 分区数が違う（${n:-空}）"
@@ -223,6 +192,28 @@ resolved=$(psql -tAc "SELECT core.project_of('document', 'aaaaaaaa-aaaa-4aaa-8aa
 say "== 監査ログ分区 =="
 n=$(psql -tAc "SELECT count(*) FROM pg_inherits WHERE inhparent='core.audit_log'::regclass;")
 [ "${n:-0}" -ge 12 ] && ok "月次分区が $n 個ある" || no "分区が足りない（${n:-0} 個）"
+
+# 保持期間は**分区 DROP** で実現する（追記専用を崩さない）。
+psql -q -c "CREATE TABLE core.audit_log_202001 PARTITION OF core.audit_log
+  FOR VALUES FROM ('2020-01-01') TO ('2020-02-01');" 2>/dev/null
+dropped=$(psql -tAc "SELECT (core.maintain_audit_partitions(12, 0)->'dropped') ? 'audit_log_202001';")
+[ "$dropped" = "t" ] && ok "期限切れ分区を落とせる" || no "期限切れ分区が落ちない（${dropped:-空}）"
+n=$(psql -tAc "SELECT count(*) FROM pg_class c JOIN pg_namespace ns ON ns.oid=c.relnamespace
+  WHERE ns.nspname='core' AND c.relname='audit_log_202001';")
+[ "$n" = "0" ] && ok "分区が実際に消えている" || no "分区が残っている（$n）"
+# retention=0 は「消さない」。既定で過去を消し始めないことの検査。
+psql -q -c "CREATE TABLE core.audit_log_202001 PARTITION OF core.audit_log
+  FOR VALUES FROM ('2020-01-01') TO ('2020-02-01');" 2>/dev/null
+kept=$(psql -tAc "SELECT core.maintain_audit_partitions(0, 0)->'dropped' = '[]'::jsonb;")
+[ "$kept" = "t" ] && ok "retention=0 なら何も消さない" || no "retention=0 でも消している"
+psql -q -c "DROP TABLE core.audit_log_202001;" 2>/dev/null
+
+# 破壊的な関数は app から呼べない。
+if psql -U systivra_app -q -c "SELECT core.maintain_audit_partitions(1,0);" >/dev/null 2>&1; then
+  no "app が監査分区を操作できてしまう"
+else
+  ok "監査分区の操作は app から呼べない"
+fi
 
 say "== SET LOCAL 残留（接続再利用）=="
 # 同じ接続で「スコープ付き → コミット → スコープ無し」を続けて実行する。
