@@ -2222,3 +2222,64 @@ body.drawer-open {
   background: rgba(255, 193, 7, 0.22);
   box-shadow: inset 3px 0 0 rgba(255, 152, 0, 0.9);
 }
+
+/* Ontology のマトリクス。型が増えても読めるよう、見出しは固定して小さく保つ。 */
+.matrix-wrap {
+  max-height: 520px;
+  overflow: auto;
+}
+
+table.data.matrix {
+  font-size: 11px;
+  width: auto;
+}
+
+table.data.matrix th.matrix-corner,
+table.data.matrix th.matrix-row-head {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--surface-2);
+  text-align: left;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+table.data.matrix th.matrix-head {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  height: 96px;
+  padding: 4px 2px;
+  font-weight: 500;
+}
+
+table.data.matrix th.matrix-corner {
+  z-index: 4;
+}
+
+table.data.matrix td.matrix-cell {
+  padding: 2px 4px;
+  text-align: center;
+  min-width: 22px;
+  color: var(--faint);
+  border-bottom: 1px solid var(--line);
+}
+
+table.data.matrix td.matrix-cell-on {
+  background: var(--accent-weak, rgba(64, 128, 255, 0.14));
+  color: var(--text);
+  font-weight: 600;
+}
+
+table.data.matrix td.matrix-cell-clickable {
+  cursor: pointer;
+}
+
+table.data.matrix td.matrix-cell-clickable:hover {
+  outline: 1px solid var(--accent, #4080ff);
+  outline-offset: -1px;
+}

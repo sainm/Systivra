@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { AppShell } from "../components/AppShell";
+import { OntologyMatrix } from "../components/OntologyMatrix";
 import { ErrorNotice } from "../components/ui";
 import {
   createOntologyDraft,
@@ -50,6 +51,8 @@ export function OntologyPage({
   const [editingRelation, setEditingRelation] = useState<string | null>(null);
   const [versions, setVersions] = useState<OntologyVersionListResponse["items"]>([]);
   const [baseVersion, setBaseVersion] = useState("");
+  const [view, setView] = useState<"list" | "matrix">("list");
+  const [typeFilter, setTypeFilter] = useState("");
 
   async function load() {
     try {
@@ -392,7 +395,46 @@ export function OntologyPage({
           <div className="panel">
             <div className="panel-head">
               <span className="panel-title">{t("ontology.entityTypes")}</span>
+              <div className="row">
+                <input
+                  className="input input-sm"
+                  placeholder={t("ontology.filter")}
+                  value={typeFilter}
+                  onChange={(event) => setTypeFilter(event.target.value)}
+                />
+                <button
+                  className={`btn btn-sm${view === "list" ? " btn-primary" : " btn-ghost"}`}
+                  onClick={() => setView("list")}
+                >
+                  {t("ontology.list")}
+                </button>
+                <button
+                  className={`btn btn-sm${view === "matrix" ? " btn-primary" : " btn-ghost"}`}
+                  onClick={() => setView("matrix")}
+                >
+                  {t("ontology.matrix")}
+                </button>
+              </div>
             </div>
+            {view === "matrix" ? (
+              <div className="panel-body">
+                <OntologyMatrix
+                  types={(draft ?? ontology).entity_types}
+                  relations={(draft ?? ontology).relation_types}
+                  filter={typeFilter}
+                  // 編集中だけ「押したセルを関係型フォームへ」流し込む。
+                  onPick={
+                    draft
+                      ? (source, target) => {
+                          setRelationSource(source);
+                          setRelationTarget(target);
+                          setNotice(t("ontology.matrixPicked"));
+                        }
+                      : undefined
+                  }
+                />
+              </div>
+            ) : (
             <div className="table-wrap">
               <table className="data">
                 <thead>
@@ -432,6 +474,7 @@ export function OntologyPage({
                 </tbody>
               </table>
             </div>
+            )}
           </div>
 
           <div className="panel">

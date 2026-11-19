@@ -616,5 +616,13 @@
   "ontology.cancel": "取消",
   "ontology.transitive": "推移的",
   "ontology.base": "複製元の版",
-  "ontology.basedOn": "複製元"
+  "ontology.basedOn": "複製元",
+  "ontology.matrix": "マトリクス",
+  "ontology.list": "一覧",
+  "ontology.matrixHint": "行が始点、列が終点です。数字は結べる関係型の数。セルを押すと関係型の入力に反映します。",
+  "ontology.matrixEmpty": "表示できる実体型がありません。",
+  "ontology.matrixTruncated": "40 件までに絞っています。検索で絞り込んでください。",
+  "ontology.matrixWildcard": "任意の型に効く関係型（*）",
+  "ontology.filter": "型を絞り込む",
+  "ontology.matrixPicked": "始点と終点をフォームに入れました。関係型の名前を入れて追加してください。"
 }

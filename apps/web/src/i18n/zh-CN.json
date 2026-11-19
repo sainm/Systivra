@@ -616,5 +616,13 @@
   "ontology.cancel": "取消",
   "ontology.transitive": "传递",
   "ontology.base": "基准版本",
-  "ontology.basedOn": "基于"
+  "ontology.basedOn": "基于",
+  "ontology.matrix": "矩阵",
+  "ontology.list": "列表",
+  "ontology.matrixHint": "行是起点，列是终点。数字表示可以连接的关系类型数量。点击单元格会把端点填进表单。",
+  "ontology.matrixEmpty": "没有可显示的实体类型。",
+  "ontology.matrixTruncated": "只显示前 40 个，请用过滤缩小范围。",
+  "ontology.matrixWildcard": "适用于任意类型的关系（*）",
+  "ontology.filter": "过滤类型",
+  "ontology.matrixPicked": "已把起点和终点填进表单，请填写关系类型名称后添加。"
 }

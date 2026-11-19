@@ -616,5 +616,13 @@
   "ontology.cancel": "Cancel",
   "ontology.transitive": "Transitive",
   "ontology.base": "Base version",
-  "ontology.basedOn": "Based on"
+  "ontology.basedOn": "Based on",
+  "ontology.matrix": "Matrix",
+  "ontology.list": "List",
+  "ontology.matrixHint": "Rows are sources, columns are targets. The number is how many relation types connect them. Click a cell to fill the relation form.",
+  "ontology.matrixEmpty": "No entity types to show.",
+  "ontology.matrixTruncated": "Showing the first 40. Narrow it down with the filter.",
+  "ontology.matrixWildcard": "Relation types that apply to any type (*)",
+  "ontology.filter": "Filter types",
+  "ontology.matrixPicked": "Source and target are in the form. Name the relation type and add it."
 }
