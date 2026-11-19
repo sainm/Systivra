@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026-11-19 — 全 UI 受入を通して状態を棚卸し
+
+`npm run check:ui:all` を追加。15 本を順に走らせ、**「落ちた」と「前提が無い」を
+分けて**表示する（前提は各チェックの説明として出す）。
+
+### 結果（この検証 DB）
+
+```
+PASS  phase2-revisions / phase3 / phase4 / phase5-inquiry / workflow / ontology   (6)
+FAIL  phase2 / phase3-ops / phase5 / phase6 / phase7 / phase7-inquiry /
+      phase7-mcp / phase8                                                        (8)
+SKIP  cancel（DOC_TITLE 未設定）                                                  (1)
+```
+
+失敗 8 件はすべて**フィクスチャ不足**で、UI の回帰ではない。内訳:
+
+| チェック | 足りないもの |
+|---|---|
+| phase2 | XLSX 設計書（Phase 2 受入で取り込む） |
+| phase3-ops | 終了状態のグラフ再構築 |
+| phase5 | 設計書がコードに言及している状態 |
+| phase6 | ルール抽出できる解析済み文書 |
+| phase7 / phase7-mcp | MCP サーバー登録 |
+| phase7-inquiry | 見出しを持つ完了済みの問い合わせ |
+| phase8 | ローカル IdP 設定 |
+
+### 副産物
+
+- `graph_meta.projection_build` に **BUILDING のまま止まった行**が 1 件あった
+  （作業中に worker を落としたため）。再構築が中断されると状態が残り続けるので、
+  タイムアウトで ABORTED に落とす仕組みが要る（未対応）。
+- `curl` が突然 PATH から消える現象があった（同じシェルで直前に動いていた）。
+  以降の疎通確認は python で行った。
+
 ## 2026-11-19 — Workflow エディタの検証をサーバーと揃える
 
 ### Fixed

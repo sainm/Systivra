@@ -188,6 +188,7 @@ scripts/scheduler-rls-eval.py scheduler の NOBYPASSRLS 下でのジョブ・保
 cd apps/web && npm run check:ui:phase8                     # ログイン / セキュリティ / ユーザー（要 API + Vite）
 cd apps/web && npm run check:ui:cancel                     # 解析 / Agent run の取消ボタン（job-cancel-eval が起動）
 cd apps/web && npm run check:ui:ontology                   # Ontology 編集（DRAFT / 型 / 関係型 / マトリクス / 破棄）
+cd apps/web && npm run check:ui:all                        # 全 UI 受入を順に実行（前提不足は SKIP と理由を表示）
 ```
 
 ### ローカル起動
