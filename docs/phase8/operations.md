@@ -197,6 +197,28 @@ HMAC 署名）を `deployment/systemd/systivra-audit-forward.timer` などで定
 Azure / RDS では、**プラットフォーム側の PITR を使う復旧手順**を別途訓練する
 （復元先は新サーバーになる点が自前クラスタと違う）。
 
+### 監査ログの保持期間
+
+`core.audit_log` は**月次パーティション**で、保持期間は `DELETE` ではなく
+**分区の DROP** で実現する。追記専用（app / worker から UPDATE / DELETE を剥がす）
+という約束を崩さずに済み、VACUUM も要らない。
+
+```bash
+# 0 は「消さない」（既定）。過去を消し始めるのは明示的に選ばせる。
+AUDIT_RETENTION_MONTHS=60
+AUDIT_PARTITION_AHEAD_MONTHS=12
+```
+
+worker が起動時 + 24 時間ごとに `core.maintain_audit_partitions(retention, ahead)` を
+呼ぶ。関数は `SECURITY DEFINER` で、対象を `audit_log_YYYYMM` に限定し、
+`systivra_scheduler` にだけ EXECUTE を渡す（app からは呼べない）。
+
+- 落とすのは**丸ごと期限切れの月**だけ。当月・先月には触れない。
+- 同時に**先の月を補う**。002 のコメントが「運用ジョブが毎月追加する」と
+  書いていた部分の実装で、24 か月後に INSERT が失敗する穴を塞ぐ。
+- 実測（`scripts/verify-db.sh`）: 期限切れ分区の DROP / 実削除 /
+  `retention=0` で何も消えない / app から呼べない、の 4 点。
+
 ## 8. インシデント時の最小手順
 
 1. Cookie 盗難の疑い: `UPDATE core.session SET revoked_at=now()` → 全員再ログイン。

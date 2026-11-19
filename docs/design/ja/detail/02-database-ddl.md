@@ -29,6 +29,7 @@
 | `systivra_scheduler` | ジョブ取り出しのみ | `core.job` の `UPDATE` + `scheduler_scope` 方針（横断閲覧） | それ以外の全テーブル |
 
 - `core.audit_log` は**どれにも `UPDATE` / `DELETE` を渡さない**。追記専用を権限で担保する。
+- **取消だけが例外で、`systivra_app` は `core.job` を直接 `UPDATE` しない。** 031 の `core.request_job_cancel(uuid)`（`SECURITY DEFINER`、関数内で `core.current_project()` との一致を検査）を呼び、即時取消 / 停止フラグ / 冪等 / 終態を文字列で受け取る。実行権は `systivra_app` のみ（`roles.sql`）。
 - RLS はロールを問わず効く。`systivra_app` / `systivra_worker` は必ず `SET LOCAL app.project_id` を設定する。全プロジェクト横断で取り出す必要があるのは**取り出しクエリだけ**なので、その範囲を `systivra_scheduler` に閉じる（`detail/09` §3 の 2 プロセス構成と対応）。
 - **横断閲覧は `BYPASSRLS` ではなく RLS 方針で表現する。** `deployment/postgres/roles.sql` が `scheduler_scope`（`FOR ALL TO systivra_scheduler USING (true)`）を許可リストの 4 表（`core.job` / `core.project` / `ai.approval_request` / `test.test_execution`）に張る。
   - 理由 1: **マネージド PG では属性を付けられない場合がある。** Azure Database for PostgreSQL は PG16 未満、admin（`azure_pg_admin`）が非管理者ロールに `BYPASSRLS` を付与できない。RDS / Cloud SQL も制約が異なる。

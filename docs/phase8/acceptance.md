@@ -175,8 +175,15 @@ RPO は「バックアップ時点の一貫したスナップショット」ま�
 - OIDC の back-channel logout とフロントチャネル logout（`iss` + `sid`）は実装。
   SAML、IdP 主導のセッション一覧同期は未実装。
 - 未知の subject は自動プロビジョニングしない。紐付けは SQL で行う（`06-API.md` §2.0）。
-- SCIM は Users / Groups、ETag、Groups の displayName / members / role PATCH、Bulk まで実装。
-  `PUT` の完全置換仕様（readOnly 属性の保持など）と任意属性の PATCH は未対応。
+- SCIM は Users / Groups、ETag、Users / Groups の `PUT`（完全置換）、
+  任意属性の `PATCH`、Bulk まで実装。
+  - `PUT /Users/{id}` は省略属性を既定へ戻す（`displayName` → `userName`、
+    `emails` → 空、`active` → true）。`id` / `meta` / `schemas` は読み取り専用として無視。
+  - `PATCH` は `add` / `replace` / `remove` を受け、`active` / `displayName` /
+    `name.formatted` / `emails`（`emails[type eq "work"].value` を含む）を更新できる。
+    **未知の path は 400**（黙って捨てると IdP 側は成功したと誤解する）。
+  - `userName`（`login_id`）は認証の識別子なので**不変**。`PUT` で変更を試みると 400。
+  - 実測: `scripts/phase8-sso-eval.py` の 57 項目に PUT 3 / PATCH 3 を追加して通過。
   グループ→ロールは最も強いロールを付与し、グループから外れた SCIM 由来メンバーは
   `VIEWER` へ降格する（`OWNER` と手動付与は触らない）。
 - ID token の署名鍵ローテーションは discovery キャッシュの再取得で追随するが、
@@ -259,4 +266,5 @@ Phase 8 の正式完了には、少なくとも次が必要。
 4. Neo4j データベース全体の clean-room 復旧と、Neo4j 停止を跨ぐ手順。
 5. HA 配置（API 複数、worker 複数、PG レプリカ）と、共有ストアでのセッション失効・
    SIEM カーソル（レート制限の共有は実装済み）。
-6. 顧客環境での運用手順レビュー、SIEM 側の重複排除、監査保持期間。
+6. 顧客環境での運用手順レビュー、SIEM 側の重複排除。
+   （監査保持期間は 2026-11-17 に実装。`AUDIT_RETENTION_MONTHS` で月次分区を DROP する）

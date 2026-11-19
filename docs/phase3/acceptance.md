@@ -116,17 +116,17 @@ Neo4j: `bolt://localhost:7687`（ローカル Community。認証は開発用で�
 | 項目 | 状態 | 理由 / 次の扱い |
 |---|---|---|
 | 影ラベルによる無停止再構築（I-5） | **実装** | 影ラベル `Entity__<8hex>` に構築 → 差分追従 → 検証（差分 0）→ ラベル入替。BUILDING / VERIFYING / SWITCHED / FAILED / ABORTED を `projection_build` に残す。`POST /graph/rebuild/abort` で中止でき、旧グラフは無傷（G-06 / G-07 を実測） |
-| 日次漂流検出 | **実装** | worker が起動時 + 24 時間ごとに PG / Neo4j の件数を比較し `graph_meta.projection_drift` に記録。劣化時は監査 `graph.drift.detected`。`GET /graph/stats` が未消費イベント数・直近 drift・最終再構築を返し、グラフ画面に表示（G-09 を実測） |
+| 日次漂流検出 | **実装** | worker が起動時 + 24 時間ごとに PG / Neo4j の件数を比較し `graph_meta.projection_drift` に記録。劣化時は監査 `graph.drift.detected`。`GET /graph/stats` が未消費イベント数・直近 drift・最終再構築を返し、グラフ画面に表示（G-09 を実測）。**Neo4j 未接続時は `neo4j_nodes` / `drift_rate` を `null` で返す**（2026-11-17 修正。以前は 0 を代入して `drift_rate=1.0` になり「100% 漂流」の誤報になっていた） |
 | 投影器 10 分停止 | **未実施** | 3 秒停止で代替。10 分間のイベント蓄積と復旧は未検証 |
 | 1,000 実体 / 84 万ノードの負荷 | **未実施** | 10 万ノードの PG lite 隣接のみ合成データで実測。Neo4j 側の 10 万ノード投影は未実施 |
 | 複数 projector の並走 | **実装** | outbox に `locked_by` / `locked_until` を追加し、`FOR UPDATE SKIP LOCKED` の claim リースで配る。2 worker 並走で重複・欠落 0、stale lock の再取得を実測 |
 | UNWIND バッチ投影 | **実装済み** | 1,000 件ずつ `UNWIND`（`apply_entities_as` / `apply_relationships_as`） |
-| 改版切替の tombstone | **未実装** | `DocumentRevisionSuperseded` は未実装。Phase 1 の改版履歴（`/revisions`）が未実装のため、版切替を起こせない。`revision` / `valid_to` の列と削除時の `valid_to` 閉止のみ実装 |
+| 改版切替の tombstone | **実装**（2026-11-08） | `POST /projects/{pid}/documents/{did}/revisions/{rid}:activate` が旧版の実体を tombstone し、`DocumentRevisionSuperseded` を outbox に積む（`store::supersede_document_revision`）。projector は同イベントで Neo4j の旧版ノードを削除する（`worker::project`）。`scripts/phase2-revision-eval.py` の実測: 旧版 Neo4j ノード 0 / 新版 101 / PG tombstone 101 / superseded publish 1 / 監査 1 行 |
 | chunk の投影 | **設計どおり対象外** | I-3 により chunk は投影しない。Phase 3 受入文の「Document/Section/Chunk」は chunk を除く構造実体として解釈 |
-| Ontology の型編集 | **未実装** | 閲覧 + 公開のみ。型の追加・属性編集・関係マトリクスは未実装 |
+| Ontology の型編集 | **実装（実体型。関係型は閲覧のみ）**（2026-11-18） | 公開版を複製した **DRAFT** を作り（`POST /graph/ontology/drafts`）、実体型の追加・更新（`PUT /graph/ontology/entity-types`）と削除（`DELETE …/entity-types/{name}`）を DRAFT に閉じて行う。`publish` に `draft: true` を渡すと **DRAFT をそのまま公開**（従来の「公開版を複製して新版を作る」は既定のまま）。検証: name は大文字始まりの英数字/_、親型の存在、**親子の循環**、`properties_schema` はオブジェクト。削除は子型・関係型から参照されていると拒否。UI は Ontology 画面に「型を編集」→ 追加/削除/公開。関係マトリクスの編集は未実装 |
 | Cytoscape / 経路ハイライト | **降格** | SVG の静的レイアウト。フィルタと経路ハイライトは無い |
 | Neo4j 5.26 LTS | **未検証** | ローカルは 2026.05.0 Community。`docker-compose.yml` に `neo4j:5.26-community` を定義したが、Docker が無いため未起動 |
-| docker compose（Neo4j 含む） | **未実行** | 開発機に Docker / compose provider が無い。Podman での Phase 3 構成検証も未実施 |
+| docker compose（Neo4j 含む） | **未実行** | 開発機に Docker / compose provider が無い。Podman での Phase 3 構成検証も未実施。`docker-compose.yml` の initdb は全マイグレーション（現在 001〜030）を網羅するだが、起動そのものは未検証 |
 | 認証付き Neo4j | **未検証** | ローカルは permissive。アプリは user / password を送るが、認証失敗経路は未試験 |
 
 ---

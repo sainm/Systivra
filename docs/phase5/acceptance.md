@@ -233,17 +233,17 @@ hub として展開を打ち切り、性能 chain は depth 0〜5 の 6 層を�
 
 | 項目 | 状態 | 扱い |
 |---|---|---|
-| 自然言語 seed / `NEEDS_CLARIFICATION` | **実装（部分一致）** | DB の名前言及候補を最大500件取得。RAG 併用は未実装。曖昧なら止まる |
+| 自然言語 seed / `NEEDS_CLARIFICATION` | **実装（部分一致）** | DB の名前言及候補を最大500件取得。曖昧（複数 or 確度 < 0.9）なら止まる。RAG 側は実装済みだが**既定で無効**（下の行） |
 | Git unified diff / line-level seed | **PASS** | unified diff と原文 LCS の両方から行範囲を求め、最小包含 Symbol を seed にする |
 | フィールド読み書き閉包 | **PASS** | Java 解析の `READS / WRITES` Fact と双方向グラフで読み書き method に閉包 |
 | コードと文書の意味リンク | **一部** | 名前一致 chunk を `INFERRED` で返す。Ontology の `DESCRIBES` 実装ではない |
-| テスト資産照合 | **一部** | 既存ケースは `covers_impacts` で照合。草稿は最大 20 件を提案（保存しない） |
+| テスト資産照合 | **実装**（2026-11-17） | 影響評価の `test_coverage` が既存ケースの `covers_impacts` / `covers_screens` と突き合わせ、`covering_cases` / `covered_item_ids` / `uncovered_item_ids` を返す。草稿提案（最大 20 件、保存しない）は従来どおり。詳細は [`docs/phase6/acceptance.md`](../phase6/acceptance.md) §3 |
 | 20 変更 recall / precision | **PASS（合成 SAMPLE）** | recall 1.0 / precision 0.833333。顧客案件の正解ではない |
 | PDF | **PASS** | `report.pdf`、日本語フォントサブセット。CI では font 未配置時に明示 409 |
 | SSE `partial → done` | **PASS** | `text/event-stream`、`Last-Event-ID` 再開。5 段の順序と欠番を実測 |
 | 250 万 Fact / 6 ホップ性能 | **PASS（合成）** | 2,500,005 edge、frontier 限定、1.07s。全件ロードなし |
 | 本番 DB の impact report 保存形式 | **暫定** | `impact.assessment_draft.report` JSONB。大規模時は artifact へ退避 |
-| RAG 併用 seed | **未接続** | 自然言語はグラフ名の決定的部分一致。外部 rerank / RAG 統合は境界外 |
+| RAG 併用 seed | **実装（既定 OFF、`SEED_RAG=1` で有効）** | 設計（`detail/08` §2.3）は「RAG top20 + entity_search top20 → RRF」。`chunk → document_id → Document 実体` で候補化する。実体の `natural_key` は **doc_node の id** で、文書との対応は `properties.document_id`（`sync_document_nodes` が付ける）。名前一致は使わない — Section 名は chunk 本文と一致しない（実測 200 件すべて不一致）。**既定で無効**な理由: ローカル埋め込みは hashed bag-of-words で、語彙検索も汎用語（「画面」等）で当たるため、`SEED_RAG=1` では「今日の天気を教えて」でも候補が立ち `QUEUED` になる（実測）。無意味な質問で進むのは `detail/08` §2.2 の「最も危険な失敗」なので、既定は名前一致のみ。実埋め込みを入れた時点で既定 ON にする |
 
 ---
 
@@ -268,7 +268,7 @@ hub として展開を打ち切り、性能 chain は depth 0〜5 の 6 層を�
 ## 5. 再現
 
 ```bash
-# 空 DB に 001〜027 と roles を適用
+# 空 DB に全マイグレーション（現在 001〜030）と roles を適用
 PGHOST=localhost PGUSER=<admin> ./scripts/verify-db.sh
 
 ./scripts/seed-dev.sh

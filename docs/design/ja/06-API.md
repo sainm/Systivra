@@ -142,7 +142,10 @@ SCIM は `SCIM_BEARER_TOKEN` を設定したときだけ有効（未設定は 40
 | GET | `/projects/{pid}/documents` | 一覧（type/domain/status） | `document:read` |
 | GET | `/documents/{did}` | 詳細 + 現行改版 | `document:read` |
 | GET | `/documents/{did}/content` | 原本のバイト列 | `document:read` |
-| GET | `/documents/{did}/revisions` | 改版履歴（未実装） | `document:read` |
+| GET | `/documents/{did}/revisions` | 改版履歴（実装済み） | `document:read` |
+| POST | `/projects/{pid}/documents/{did}/revisions` | 改版登録（実装済み） | `document:write` |
+| GET | `/documents/{did}/revisions/{rid}/content` | 改版原本のバイト列（実装済み） | `document:read` |
+| POST | `/projects/{pid}/documents/{did}/revisions/{rid}:activate` | 改版切替（実装済み） | `document:write` |
 | POST | `/documents/{did}/revisions/{rid}:parse` | 解析開始（非同期） | `document:write` |
 | GET | `/documents/{did}/tree?revision_id=` | 構造木（実装済み） | `document:read` |
 | GET | `/documents/{did}/chunks?revision_id=` | 文書チャンク一覧（実装済み） | `document:read` |
@@ -155,8 +158,8 @@ SCIM は `SCIM_BEARER_TOKEN` を設定したときだけ有効（未設定は 40
 | GET | `/evidence/{eid}` | 証拠原文 + 文脈 | `knowledge:read` |
 
 > 実装済み: upload-url / ローカル PUT / 登録 / 一覧 / 詳細 / content / parse / delete / search /
-> chunks / tree / document chunks / evidence / jobs / events / audit / bulk-import / index-builds。
-> 未実装: `revisions`（改版履歴）、`jobs: cancel`。
+> chunks / tree / document chunks / evidence / jobs / events / audit / bulk-import / index-builds /
+> revisions（履歴・登録・切替）/ jobs:cancel。
 
 ### 2.3 Graph / Ontology
 
@@ -250,7 +253,7 @@ project-scoped 一覧とは別に、リソースからプロジェクトを解�
 | GET | `/agents` | 一覧 | `ai:read` |
 | POST | `/agents/{aid}/runs` | 実行（非同期 / ストリーム） | `ai:execute` |
 | GET | `/agent-runs/{rid}` | 詳細 + ステップ | `ai:read` |
-| POST | `/agent-runs/{rid}:cancel` | キャンセル | `ai:execute` |
+| POST | `/agent-runs/{rid}:cancel` | キャンセル（run を CANCELLED にし、対応 job と承認待ちも閉じる。終態は 409、再取消は冪等 200） | `ai:execute` |
 | GET | `/approvals?status=pending` | 承認待ち | `approval:read` |
 | POST | `/approvals/{id}:decide` | 承認 / 却下 | `approval:decide` |
 | GET | `/workflows` | 一覧 | `workflow:read` |
@@ -270,7 +273,7 @@ project-scoped 一覧とは別に、リソースからプロジェクトを解�
 | POST | `/mcp/servers/{id}:discover` | ツール再検出 | `platform:admin` |
 | GET | `/projects/{pid}/audit-logs?limit=50` | 監査照会（Phase 1 は limit のみ） | `audit:read` |
 | GET | `/jobs/{jid}` | ジョブ状態 | 資源権限を継承 |
-| POST | `/jobs/{jid}:cancel` | キャンセル（Phase 2） | 資源権限を継承 |
+| POST | `/jobs/{jid}:cancel` | キャンセル（PENDING/QUEUED は即時 CANCELLED、RUNNING は協調停止、終態は 409、CANCELLED への再取消は冪等 200） | 資源権限を継承 |
 | GET | `/jobs/{jid}/events` | SSE 進捗 | 資源権限を継承 |
 
 ---

@@ -195,15 +195,15 @@
 | classpath_index の jar 構築 | **未実装** | 表だけで、Maven/Gradle 依存解決は無い |
 | SVN clone・branch / tag | **未導入** | `svn` を前提にせず API は unsupported。Git はローカル bare / `file://` で E2E 済み |
 | SAStruts / Seasar annotation 全般 | **一部** | Dicon class/name は実装。規約 URL、property 注入の完全解決は未実装 |
-| TLD とカスタム Tag | **一部** | JSP HTML は解析。TLD 有無による `RESOLVED / UNRESOLVED` は未実装 |
+| TLD とカスタム Tag | **実装**（2026-11-18） | `*.tld` を解析して `DECLARES`（`Tld:<path>` → `Tag:<uri>#<name>`）を出し、JSP の `<%@ taglib %>` 宣言と `<prefix:name>` 使用箇所から `REFERENCES`（`Screen:Jsp:<path>` → `Tag:`）を出す。TLD がある → `RESOLVED`（0.9）／TLD に定義が無い → `UNRESOLVED`（理由付き）／**TLD 自体が無い → `UNRESOLVED`（推測しない）**。実測: `Tld:…/fmt.tld|…#message|RESOLVED`、`…#message|RESOLVED`、`…#nosuchtag|UNRESOLVED`（`scripts/phase4-git-eval.py` 24/24） |
 | JSqlParser | **未使用** | 基本 token 走査。複雑な SQL、CTE、DB 方言は未検証 |
 | 解析による 250 万 Fact 生成 | **外部依存・未実施** | 250 万 Fact 相当の永続化・graph 再投影は受入済み。13,000 Java の解析は 104,000 Fact |
 | 1,000+ JSP の実規模解析 | **未実施** | 13,000 Java は合成、JSP は 12 ファイル SAMPLE と単体 fixture |
 | 増分 Fact の自動再投影 | **PASS（小規模 E2E）** | 未変更 Fact の新 revision graph/outbox を生成。2.5M は全件 rebuild API で投影 |
 | JSP 200 行・全 W-31J fixture | **未実施** | 基本 scriptlet と Shift_JIS Java は検証。大規模 JSP は未検証 |
-| UI の Source 行ハイライト | **未実装** | quote と byte range を表示。原文を該当行へスクロールする viewer は未接続 |
-| 増分の逆依存 1 層 | **未実装** | 変更ファイルだけを再解析。service signature 変更から呼び出し元へ広げる処理は無い |
-| JSP scriptlet の CALLS Fact | **未実装** | scriptlet は構文検査まで。HTML form は Fact 化するが Java 呼び出しは未生成 |
+| UI の Source 行ハイライト | **実装**（2026-11-17） | 証跡をクリックすると原文ビューアが開き、`line_starts`（元ファイル基準のバイト位置）から該当行を求め、その行を強調して `scrollIntoView` する。文字コードはサーバー側で解析時と同じ判定器を使う（`GET /code/files/{fid}/text`。Shift_JIS でも行がずれない）。20,000 行で打ち切り、切ったことは画面に出す。実測: 証跡 `new Hello().greet()` → 5 行目を強調（8 行のファイル） |
+| 増分の逆依存 1 層 | **実装**（2026-11-17） | 親 revision の `CALLS` 事実を使い、**シグネチャが変わった（または消えた）シンボル**の呼び出し元ファイルを解析対象へ 1 層だけ広げる。本体だけの変更では広げない（`signature IS DISTINCT FROM`）。実測: Hello.greet のシグネチャ変更 → `files_analyzed=2 / callers=1`、本体のみ変更 → `files_analyzed=1 / callers=0`（`scripts/phase4-git-eval.py` 20/20） |
+| JSP scriptlet の CALLS Fact | **実装**（2026-11-17） | 合成した Java（`class J{void m(){...}}`）を tree-sitter で解析し、`method_invocation` を元ファイルのバイト位置へ戻して `CALLS` 事実にする（`analysis_engine=jsp-scriptlet`、subject は `Screen:Jsp:<path>`）。呼び出し先は name+arity の索引で解決し、候補 1 件 → `RESOLVED` / 複数 → `PARTIAL`+candidates / 0 件 → `UNRESOLVED`+理由。JSP は**Java の索引ができてから**解析する（`finalize_java` が索引を返す）。実測: `Screen|Jsp:src/main/webapp/edit.jsp|com.example.Hello.greet()|RESOLVED`（`scripts/phase4-git-eval.py` 21/21） |
 
 ---
 

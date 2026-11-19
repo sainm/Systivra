@@ -315,13 +315,13 @@ mock MCP Server を使って実測した。
 | 項目 | 状態 | 扱い |
 |---|---|---|
 | CopilotRuntimeProvider | **未実装** | `OpenAiCompatProvider` と `DisabledAiProvider` のみ |
-| https / TLS の AI 接続 | **未実装** | `http://` のみ。閉域の vLLM / Ollama を想定 |
+| https / TLS の AI 接続 | **実装**（2026-11-17） | 転送を reqwest(rustls) に置換し `http://` / `https://` の両対応。自己署名の閉域環境向けに `AI_CA_BUNDLE`（PEM）で CA を追加できる。**設定したのに読めない場合は明示エラー**（黙って OS 既定 CA に落とさない）。`AI_TLS=1 python3 scripts/phase7-agent-loop-eval.py` が CA→葉の証明書を作り、`transport={tls:true}` で全項目通過 |
 | 実モデルでのツール選択精度 | **未検証** | mock LLM は固定の `tool_call` を返す。モデルが適切なツールを選ぶかは測っていない |
 | 予算の実消費（tokens / cost） | **一部** | 4 上限すべて判定する。`tool_calls` / `tokens` / `wall_time_sec` / `cost_usd` を実測。cost は `AI_PRICE_*` 設定時のみ（未設定は `priced=false`）。実モデルの単価・為替は未検証 |
 | MCP 12 ツールの実装 | **12 / 12** | 能力は 12 個すべて実装。MCP `tools/call` から 11 本は即実行、`test.run.execute` は承認必須（承認後に 1 回だけ実行）。`test.plan_generate` は**新規作成**、`test.case_generate` は**既存 plan への追記**で、取り違えると 400 |
 | Markdown 出力 | **実装済み**（Phase 7 の対象外） | `GET /impacts/{iid}/report.md` と `GET /change-inquiries/{iid}/report.md`。Phase 5 追補で実装・実測済み（[`docs/phase5/acceptance.md`](../phase5/acceptance.md)）。Phase 7 で新たに足したものではない |
 | React Flow の採用 | **不採用（軽量 SVG）** | 依存を増やさず、ドラッグ配置・接続・属性編集・新版本保存を自前 SVG で実装。ノード座標は `WorkflowNode.x/y` に保存し、実行には使わない |
-| Workflow 定義の YAML | **未実装** | JSON で保存（`serde_yaml` を増やさない） |
+| Workflow 定義の YAML | **書き出しのみ実装**（2026-11-18） | 保存は従来どおり JSON（`serde_yaml` を増やさない方針は維持）。`GET /workflows/{wid}/export?format=yaml` で block style の YAML を書き出す（文字列は常に二重引用符。Ruby の psych でパースできることを実測）。取り込みは JSON のみ — パーサ依存を増やさないため、**片方向**であることを明記。あわせて検証を強化: `start` は 1 つだけ / 自分自身への edge 禁止 / **start から到達できない node を拒否** / 到達可能な `end` 必須。孤立 node は実行されないため、設定として弾く |
 | 承認の 24 時間停止・再開 | **未実施** | 状態機械としての停止・再開は実測。実時間の待機は未実施 |
 | 予算の実測 | **一部** | mock LLM で `max_cost_usd` の超過を実測（`BUDGET_EXCEEDED`）。実モデルの単価・為替・キャッシュ割引は未検証 |
 | 実モデルでの Prompt 注入耐性 | **未検証** | mock LLM で Agent ホワイトリスト外 Tool の拒否は実測。実モデルの誘導耐性は未検証 |

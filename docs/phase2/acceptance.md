@@ -97,6 +97,27 @@ cd apps/web && npm run check:ui:phase2
 
 ---
 
+### 2.6 ジョブ / Agent run の取消（2026-11-18 / `scripts/job-cancel-eval.py`）
+
+`POST /jobs/{jid}:cancel` と `POST /agent-runs/{rid}:cancel` を実測。
+検証 DB `systivra_job_cancel_verify`（migration 001〜031）、API 18090 / mock LLM 11536 / Web 15176。
+実測値の機械可読版は `data/job-cancel-eval/report.json`。
+
+| 項目 | 実測 |
+|---|---|
+| QUEUED 即時取消 | `CANCELLED` / error `JOB_CANCELLED`。worker は一度も claim せず（`CANCELLED|0|-`）。parse_run も同一 tx で `CANCELLED`。再取消は冪等 200 |
+| QUEUED 権限 / 監査 | viewer は 404（资源権限を継承）。`job.cancel` 監査 2 行（初回 + 冪等再取消） |
+| RUNNING 途中停止 | PDF 1 ページ完了後に worker を SIGKILL してから取消 → `RUNNING|true`（协调フラグ）。worker 再起動が境界で停止し progress `phase=CANCELLED` / `parse_run=CANCELLED` |
+| SSE 終端 | 終端イベント到達、error に `JOB_CANCELLED` を含む |
+| Agent run 取消 | run `CANCELLED` / error `JOB_CANCELLED`、対応 job `CANCELLED`、承認待ち `REJECTED|SYSTEM`。再取消冪等、`ai.agent_run.cancel` 監査 2 行 |
+| Agent 権限 | viewer は 403 `FORBIDDEN_PROJECT_SCOPE`（`agent:write` 能力境界。job 取消の 404 とは異なる） |
+| 終態 409 | SUCCEEDED の run / job とも 409 `CONFLICT_JOB_TERMINAL`。解析済 revision の取消も 409 |
+| stalled 不復活 | 取消後の worker 再起動（attempt 2）でも `CANCELLED` 維持、`SUCCEEDED` イベント 0、`parse_run=CANCELLED`（claim 時取消も派生状態を閉じる） |
+| UI | 文書画面 `取消済み` バッジ + strip phase `取消済み` + `JOB_CANCELLED` 表示、AI 画面 run `CANCELLED` + 承認 `REJECTED`。1440 / 607 で pageerror / HTTP error 0 |
+| 監査合計 | `job.cancel` 5 / `ai.agent_run.cancel` 3 / `document.parse.cancelled` 2（worker 境界停止・claim 時取消のみ。QUEUED 即時は `job.cancel` と parse_run 閉鎖が証跡） |
+
+---
+
 ## 3. 実装済み範囲
 
 | 領域 | 実装 |

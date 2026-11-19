@@ -49,6 +49,7 @@
 | `NOT_FOUND_*` | 404 | 不可 | リソース不存在 |
 | `CONFLICT_REVISION_SUPERSEDED` | 409 | 不可 | 改版の競合 |
 | `CONFLICT_ALREADY_IMPORTED` | 409 | 不可 | 同一 content_hash |
+| `CONFLICT_JOB_TERMINAL` | 409 | 不可 | 終態ジョブ / Agent run への取消 |
 | `CAPABILITY_UNSUPPORTED` | 409 | 不可 | Provider に能力なし |
 | `PROVIDER_TIMEOUT` | 503 | 可 | 上流タイムアウト |
 | `PROVIDER_RATE_LIMITED` | 429 | 可（Retry-After） | 上流 429 |

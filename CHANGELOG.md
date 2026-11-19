@@ -1,5 +1,430 @@
 # Changelog
 
+## 2026-11-18 — マイグレーション追平の仕組み
+
+### Added
+
+- `migrations/032_schema_migration.sql`: `core.schema_migration (filename, applied_at)` と
+  `000_baseline` 行。`000_baseline` は 031 までを覆う印で、**032 以降は 1 ファイル 1 行**。
+- `scripts/migrate-catchup.sh <db>`: 未適用のファイルだけ当てる。
+  - 空 DB → 001 から順に全部当てる（032 より前は表が無いので、後でまとめて記録）
+  - 既存 DB（`core.project` あり・台帳なし）→ 032 を当てて baseline を置き、
+    001〜031 はスキップ、033 以降だけ当てる
+  - 2 回目以降は全部スキップ
+- `scripts/verify-db.sh`: 当てたファイルを最後にまとめて記録。
+- `README.md`: ローカル起動と「既存 DB を追いつかせる」手順を `migrate-catchup.sh` に変更。
+
+### Why
+
+`031_job_cancel.sql` がどの既存 DB にも当たっておらず、worker が毎 tick
+`column "cancel_requested_at" does not exist` で落ちた。同じ種類の事故がこれで 4 回目
+（明示列挙の漏れ / compose のマウント漏れ / 旧 DB が 025 で停止 / 今回）。
+台帳が無いと「当たっていないこと」に気付けない。
+
+### Verification
+
+- 空 DB: `migrate-catchup.sh` → 31 件適用、2 回目は 0 件（スキップ 31）。
+  台帳は 32 行（baseline + 31 ファイル）。
+- 既存 DB（`systivra_phase6_verify` のコピー）: 032 のみ適用、033 以降なし、
+  2 回目は 0 件。
+- **追平の実証**: 一時的に `033_catchup_probe.sql` を置くと既存 DB に自動適用され、
+  台帳に記録され、2 回目はスキップ。probe は削除済み。
+- `verify-db.sh` を最後まで実行し「全て通過」。
+- 既存の 2 つの検証 DB に `migrate-catchup.sh` を適用（032 を記録済み）。
+- fmt / clippy / test。
+
+## 2026-11-18 — TLD とカスタム Tag（RESOLVED / UNRESOLVED）
+
+### Added
+
+- `*.tld` を解析（`engine-code/src/jsp/tld.rs`、quick-xml 使用）。`uri` / `short-name` /
+  `tag` 名 / `attribute` 名を拾い、`DECLARES` 事実（`Tld:<path>` → `Tag:<uri>#<name>`）を出す。
+  `.tld` は `Language` ではないので、言語判定より前に拾って `language = "TLD"` で記録する。
+  文字コードを確定できない場合は `ENCODING_UNDETECTED` を積む。
+- JSP 側: `<%@ taglib prefix=… uri=… %>` を指令ブロックから読み、`<prefix:name>` の
+  使用箇所から `REFERENCES` 事実（`Screen:Jsp:<path>` → `Tag:<uri>#<name>`）を出す。
+  - TLD があり定義もある → `RESOLVED`（0.9）
+  - TLD はあるが定義が無い → `UNRESOLVED`（理由: 定義が無い）
+  - **TLD 自体が無い → `UNRESOLVED`（理由: 添付されていない）** — 推測しない（`detail/06` A-05）
+
+### Verification
+
+- 単体: `parses_uri_and_tags` / `rejects_non_tld`（tld）、
+  `custom_tag_resolves_when_tld_present` / `custom_tag_without_tld_stays_unresolved` /
+  `custom_tag_missing_in_tld_is_unresolved`（engine-code 52 tests pass）。
+- 統合（`scripts/phase4-git-eval.py` 24/24）: フィクスチャに `WEB-INF/fmt.tld` と
+  `<fmt:message>` / `<fmt:nosuchtag>` を追加。
+  `Tld:…/fmt.tld|…#message|RESOLVED`、`…#message|RESOLVED`、`…#nosuchtag|UNRESOLVED` を実測。
+
+### 運用メモ（再発 4 回目）
+
+- 検証中に worker が `column "cancel_requested_at" does not exist` で全 tick 失敗。
+  `migrations/031_job_cancel.sql` が**どの既存 DB にも適用されていなかった**ことが原因。
+  `scripts/verify-db.sh` は glob で当てるが、**既存 DB は作り直さないと追いつかない**。
+  031 を両方の検証 DB に適用して解消した。
+- 対策案（未実施）: `core.schema_migration` に適用済みファイル名を記録し、
+  `scripts/migrate-catchup.sh` で差分だけ当てる。無いと 5 回目が起きる。
+
+## 2026-11-18 — Ontology の実体型編集（DRAFT 方式）
+
+### Added
+
+- `POST /graph/ontology/drafts`: 公開版を複製した DRAFT を作る（既にあれば返す）。
+  編集は DRAFT に閉じるので、**作業途中の型が公開ビューに出ない**。
+- `PUT /graph/ontology/entity-types`: DRAFT の実体型を追加 / 更新。
+- `DELETE /graph/ontology/entity-types/{name}`: 削除。子型や関係型から参照されている
+  場合は 400（壊れた定義を公開しない）。
+- `POST /graph/ontology/publish` に `draft: true`。DRAFT をそのまま公開し、
+  既存の PUBLISHED は DEPRECATED に落とす。既定は従来の「複製して新版」。
+
+### Validation
+
+- `name`: 大文字始まりの英数字と `_`、64 文字以内
+- `display_name_ja`: 1〜80 文字
+- `properties_schema`: オブジェクト
+- 親型の存在、自己参照、**親子の循環**（鎖をたどって検出）
+
+### Verification
+
+- 単体: `accepts_new_type_with_existing_parent` / `rejects_missing_parent` /
+  `rejects_parent_cycle` / `rejects_bad_names_and_schema` / `rejects_self_parent`。
+- API 実測: DRAFT 作成（56 型を複製）→ `Dialog`（親 `Screen`）追加 200 /
+  未知の親 400 / 小文字名 400 / 自己参照 400 / 参照されている `Screen` の削除 400。
+  公開前の公開ビューは 56 型・`Dialog` なし、DRAFT 公開後は 57 型・`Dialog` あり。
+  検証後は DB を v1 PUBLISHED に戻した。
+- UI 煙試験（1440px）: 「型を編集」→ チップ `編集中: draft-…` → 追加で 83→84 行、
+  行に `SmokeType / スモーク型 / Screen / 削除` → 削除で 83 行。`pageerror` 0。
+- fmt / clippy / test / OpenAPI 一致 / i18n 609 / build。
+
+### Not done
+
+- 関係型（relation type）の編集と関係マトリクスは未実装（閲覧のみ）。
+
+## 2026-11-18 — Workflow 定義の書き出しと検証強化
+
+### Added
+
+- `GET /api/v1/projects/{pid}/workflows/{wid}/export?format=json|yaml`。
+  JSON は `{code, version, definition}` を整形して返し、YAML は block style で
+  書き出す（文字列は常に二重引用符 — `:` や `#` を含む名前で壊れないため）。
+  `Content-Disposition` に `<code>-v<version>.<ext>` を付ける。
+  **YAML は片方向（書き出しのみ）**。取り込みは JSON — `serde_yaml` を増やさない
+  という既存方針（`docs/phase7`）を維持する。
+- 検証を強化（`validate_workflow`）:
+  - `start` は**1 つだけ**（複数あるとどの経路で動いたか説明できない）
+  - 自分自身への edge を禁止
+  - **start から到達できない node を拒否**（実行されない設定はバグ）
+  - 到達可能な `end` を必須
+
+### Verification
+
+- 単体: `workflow_rejects_multiple_starts` / `workflow_rejects_unreachable_node` /
+  `workflow_rejects_self_loop` / `exports_yaml_with_quoted_values`（app 27 tests pass）。
+- API 実測: 孤立 node を含む定義 → 400（`start から到達できない node`）。
+  書き出し → `content-type: application/yaml`、`filename="yaml-check-v1.yaml"`。
+  生成した YAML を **Ruby の psych** でパースし、`code/version/nodes/edges` と
+  ノード・辺の並びが一致することを確認（PyYAML は環境に無い）。
+  不正な `format=xml` → 400。
+- `scripts/phase7-eval.py` に「孤立 node は 400」「json/yaml の書き出しが 200」を追加。
+- fmt / clippy / test / OpenAPI 一致 / i18n 601 / build。
+
+## 2026-11-18 — RAG 併用 seed（実装。既定 OFF）
+
+### Added
+
+- 自然言語のシード検索に RAG 側を配線。`chunk → document_id → Document 実体` で候補化。
+  実体の `natural_key` は **doc_node の id**、文書との対応は `properties.document_id`
+  （`sync_document_nodes` が付ける）。**名前一致は使わない** — Section 名は chunk 本文と
+  一致しない（実測 200 件すべて `position(name in text) = 0`）。
+- 名前言及と RAG の両方で出た候補は確度 +0.05（上限 0.95）、RAG のみは 0.55。
+- 文書実体が無いときは `tracing::warn!`（黙って空にしない）。
+
+### Why default OFF
+
+`SEED_RAG=1` を明示したときだけ動く。理由は実測:
+
+- ローカル埋め込みは hashed bag-of-words。検索 API の `score` は RRF 後の値で
+  どの質問も `0.016`（= 1/61）になり、順位の信号として使えない。
+- 語彙検索は汎用語（「画面」）で当たるため、`SEED_RAG=1` では
+  「今日の天気を教えて」でも候補が立ち `QUEUED` になる。
+
+無意味な質問で分析を進めるのは `detail/08` §2.2 の「本機能で最も危険な失敗」なので、
+既定は従来どおり名前一致のみ。**実埋め込みを入れた時点で既定 ON にする。**
+
+### Verification
+
+- 既定: 「住所の入力桁数を30文字に変えたい」「存在しない画面Zzzを変更したい」→
+  どちらも `FAILED / NOT_FOUND_SEED`（従来どおり）。
+- `SEED_RAG=1`: 「住所…」→ `QUEUED`、「今日の天気を教えて」→ `QUEUED`
+  （これが既定 OFF の根拠）。
+- fmt / clippy / test / OpenAPI 一致。
+
+### 訂正
+
+一度「文書の図投影が旧 document.id を指していて実体が 0 件」と結論したが、**誤り**。
+実体は存在し、`properties.document_id` で現在の文書に紐づいていた（`natural_key` が
+doc_node id であることを文書 id と取り違えた）。投影の不整合は無い。
+
+## 2026-11-17 — 既存テスト資産の照合
+
+### Added
+
+- 影響評価に `test_coverage` を追加（`ImpactTestCoverage`）。既存ケースの
+  `covers_impacts` / `covers_screens` と影響項目を突き合わせ、
+  `covering_cases` / `covered_item_ids` / `uncovered_item_ids` を返す。
+- `degraded` を**2 つに分けた**:
+  - ケースが 1 件も無い → `tests_not_available`
+  - あるが一部だけ覆う → `test_coverage_partial:N`（未カバー件数）
+  「テストが無い」と「テストはあるが今回の影響を覆っていない」は別物なので、
+  同じ旗を立てない。
+- 画面: 影響評価に「既存テスト」件数を追加し、未カバーが残る場合は警告行を出す。
+
+### Verification
+
+- `scripts/test-asset-match-eval.py`（新規・自前で後始末）:
+  ケース 0 件で `{covering:0, degraded:[..., tests_not_available]}`、
+  1 件追加して再評価すると `{covering:1, covered_items:1, uncovered_items:32,
+  degraded:[..., test_coverage_partial:32]}`。
+- fmt / clippy / test / OpenAPI 一致 / i18n 595 / build。
+
+### Note
+
+- 検証用 DB（旧 `systivra_final_verify`）は 025 で止まっていたため、026〜030 を
+  適用してから使った。**マイグレーションの適用漏れは今も定期的に踏む**ので、
+  `verify-db.sh` のグロブ化（前回）と合わせて、DB を作り直す手順を一本化したい。
+
+## 2026-11-17 — 証跡から原文の該当行を開く
+
+### Added
+
+- `GET /api/v1/code/files/{fid}/text`: ソースを**行単位**で返す
+  （`encoding` / `exact_offsets` / `line_starts` / `lines` / `truncated`）。
+  生バイトを返してブラウザに文字コードを当てさせると Shift_JIS で行がずれるので、
+  サーバー側で解析時と同じ判定器（`engine_code::text::decide`）を使う。
+  `line_starts` は**元ファイル基準のバイト位置**。20,000 行で打ち切り、切ったことを返す。
+- UI: 証跡をクリックすると原文ビューアが開き、`byte_start` / `byte_end` から
+  該当行を二分探索で求め、その行を強調して `scrollIntoView` する。
+  Enter / Space でも開ける（`role="button"`）。閉じるボタンあり。
+
+### Verification
+
+- ブラウザ煙試験（1440px）: 証跡 `new Hello().greet()` をクリック →
+  ビューアが出て **5 行目**を強調（ファイルは 8 行）、
+  強調行の本文に引用が含まれることを確認。`pageerror` / HTTP error 0。
+- `GET …/text` 実測: `encoding=UTF-8`、`line_starts=[0,21,22,43,…]`、8 行。
+- fmt / clippy / test / OpenAPI 一致 / i18n 593 / build。
+
+## 2026-11-17 — JSP scriptlet の CALLS Fact
+
+### Added
+
+- JSP の scriptlet から `CALLS` 事実を生成する（`analysis_engine=jsp-scriptlet`）。
+  合成した Java（Jasper と同じ包み方）を tree-sitter で解析し、`method_invocation` を
+  **元ファイルのバイト位置へ戻して** evidence にする。subject は
+  `Screen:Jsp:<path>`、object は解決した Java メソッド。
+- 解決は name+arity の索引: 候補 1 件 → `RESOLVED`、複数 → `PARTIAL` + candidates、
+  0 件 → `UNRESOLVED` + 理由。JSP には型情報が無いので、ここは正直に段階を分ける。
+- JSP の解析を **Java の索引構築後**へ移動（`finalize_java` が索引を返し、
+  保留していた JSP をその後で解析する）。JSP 単体では呼び出し先が決まらない。
+
+### Verification
+
+- エンジン単体: `jsp_scriptlet_produces_calls_facts`（`demo.UserService.update(Object)`
+  に解決・evidence あり）/ `jsp_scriptlet_without_target_stays_unresolved`。
+  48 tests pass。
+- 統合（`scripts/phase4-git-eval.py` 21/21）: `edit.jsp` を追加し、
+  `Screen|Jsp:src/main/webapp/edit.jsp|com.example.Hello.greet()|RESOLVED` を実測。
+  既存の増分アサーション（変更 1 / 解析 2 / callers 1）も維持。
+
+### Note
+
+- `analysis_run.stats` は worker が書くため、**API と worker の両方**を再ビルドする
+  必要がある（前回これで誤診した）。
+
+## 2026-11-17 — 増分解析の逆依存 1 層
+
+### Added
+
+- コード増分解析で、**シグネチャが変わった（または消えた）シンボル**の呼び出し元
+  ファイルを解析対象へ 1 層だけ広げる。親 revision の `CALLS` 事実を使う。
+  - 本体だけの変更では広げない（`code.symbol.signature IS DISTINCT FROM`）。
+    コメントや実装の変更で呼び出し元まで再解析すると、増分の意味が無くなる。
+  - 削除（`cur.id IS NULL`）は呼び出し元が壊れる可能性があるので含める。
+  - 現行 revision に存在するファイルだけを対象にする（消えた呼び出し元は解析しない）。
+- `stats` に `files_reanalyzed_for_callers` を追加。`files_changed` は
+  「本当の変更数」のまま（従来は解析対象数と混ざっていた）。
+
+### Verification
+
+- `scripts/phase4-git-eval.py`（20/20）:
+  - `Hello.greet()` → `greet(String)` のシグネチャ変更で
+    `files_changed=1, files_analyzed=2, callers=1`。
+  - 直後に**本体だけ**変更 → `files_analyzed=1, callers=0`。
+  - `Caller.java` を追加したのでファイル数 2 → 3、revision 件数の固定値を
+    相対比較へ変更（コミットを増やすたびに壊れる書き方をやめた）。
+
+### Note
+
+- `analysis_run.stats` は **worker** が書く。API だけ再ビルドしても反映されず、
+  古い worker で実行して「機能が効いていない」と誤診しかけた（実際に一度誤診）。
+
+## 2026-11-17 — ルール単位の派生スコープ（Phase 6 の被覆 2/14 の原因）
+
+### Fixed
+
+- `derive_assets` が**ルール順に全サンプルを流していた**ため、先頭の 1〜2 ルールが
+  `max_drafts` を食い尽くし、残りのルールが 1 件も残らなかった（24 画面・14 ルールの
+  実測で被覆 2）。**ルール間の輪番**に変更し、全ルールへ 1 件ずつ行き渡らせてから
+  2 件目、3 件目へ回す。
+- 計画の `scope.rule_ids` を「全ルール」から**実際にケースが付いたルール**へ変更。
+  草稿上限で落ちたルールまで対象に見えると、被覆率の分母が実態とずれる。
+
+### Added
+
+- `POST /test/plans:derive` に `rule_ids`（任意）。計画ごとに対象ルールを指定できる。
+  **未知の ID は 400**（黙って無視すると「対象にしたつもり」の計画ができる）。
+
+### Verification
+
+- エンジン単体: 14 ルール / 20 件で **14 ルールすべてに 1 件以上**、3 ルール / 4 件で
+  `[2,1,1]` の配分（`derives` の新規テスト 2 本）。
+- 統合（実 DB）: 18 ルール / 20 件で **18/18 被覆**、`drafts_truncated=35`。
+  修正前は 20 件で 6〜7 ルール。
+- `phase6-test-eval.py`: 全ルール被覆・`rule_ids` 指定（2 ルール → 6 件 / 対象外 0）・
+  未知 ID 400 を検査。4/4・2/2 で通過。
+- fmt / clippy / test / OpenAPI 一致 / i18n 590 / build。
+
+## 2026-11-17 — SCIM の PUT / 任意 PATCH と、Neo4j 未接続時の誤報修正
+
+### Added（SCIM）
+
+- `PUT /scim/v2/Users/{id}`（**完全置換**）。省略属性は既定へ戻す
+  （`displayName` → `userName`、`emails` → 空、`active` → true）。
+  `id` / `meta` / `schemas` は読み取り専用として無視。
+- `PATCH /Users/{id}` を汎用化。`add` / `replace` / `remove` を受け、
+  `active` / `displayName` / `name.formatted` / `emails`
+  （`emails[type eq "work"].value` を含む）を更新できる。
+  **未知の path は 400**（黙って捨てると IdP は成功したと誤解する）。
+- `userName`（`login_id`）は認証の識別子なので不変。`PUT` で変えると 400。
+- store / app に `update_scim_user` を追加（`display_name` / `email` / `is_active`）。
+
+### Fixed（Neo4j 未接続時の誤報）
+
+- `GET /graph/stats` が Neo4j に繋がらないとき `neo4j_counts().unwrap_or((0,0))` で
+  0 を代入し、`drift_rate = 1.0` / `drift_degraded = true` を返していた。
+  これは「100% 漂流」の**誤報**で、Neo4j を止めただけで警報が上がる。
+  `neo4j_nodes` / `neo4j_relationships` / `drift_rate` を `Option` にし、
+  未接続は `null`、実在する 0 件は `0` と区別する。UI は `null` を
+  「Neo4j 未接続」と表示する。
+- 図の**読み取り**（`ontology` / `entities` / `subgraph` / `path`）は元から PG で
+  動いていた（`NEO4J_DISABLED=1` で 200 を実測）。`rebuild` / drift 診断は
+  本来 Neo4j が必要なので 409 のまま（成功を偽装しない）。
+
+### Fixed（検証の再現性）
+
+- `phase8-sso-eval.py` が前回実行のセッションを残したまま走り、**同じ DB で
+  2 回目以降は必ず落ちていた**（`current` が 2 件）。実行開始時に
+  当該ユーザーのセッションを消すようにした。連続 2 回で 57/57。
+- `phase8-sso-eval.py` に SCIM Users の PUT 3 件 / PATCH 3 件を追加。
+
+### Verification
+
+- SSO/SCIM: 57/57 を**2 回連続**で通過（再現性込み）。
+- グラフ: `NEO4J_DISABLED=1` で `{pg_nodes:101, neo4j_nodes:null, drift_rate:null}`、
+  Neo4j 接続時は実数（`1899 / 2082 / 17.80`）を返すことを実測。
+- fmt / clippy / test / OpenAPI 一致 / i18n 590 / build。
+
+## 2026-11-17 — AI の TLS 接続と監査ログの保持期間
+
+### Added（AI 転送）
+
+- `OpenAiCompatProvider` の手書き TCP/HTTP を **reqwest（rustls）** に置換し、
+  `http://` と `https://` の両方を受ける。`AI_CA_BUNDLE`（PEM）で社内 CA を足せる。
+- **`AI_CA_BUNDLE` を設定したのに読めない場合は明示エラー**。黙って OS 既定 CA に
+  落ちない（自己署名環境で「なぜか繋がらない」の原因が消えるため）。検証を無効化する
+  設定は用意しない。
+- 接続失敗のメッセージに `source` を連結（`error sending request` だけでは
+  TLS / DNS / 接続拒否を区別できない）。
+
+### Added（監査保持）
+
+- `migrations/030_audit_retention.sql`: `core.maintain_audit_partitions(retention, ahead)`。
+  期限切れの**月次分区を DROP** する（DELETE ではない）。`core.audit_log` の
+  追記専用（app / worker から UPDATE / DELETE 剥奪）を崩さないため。対象は
+  `audit_log_YYYYMM` に限定し、`systivra_scheduler` だけに EXECUTE。
+- 同時に**先の月の分区を補う**。002 のコメントが「運用ジョブが毎月追加する」と
+  書いていただけで実装が無く、24 か月後に INSERT が落ちる穴を塞いだ。
+- worker が起動時 + 24 時間ごとに実行。`AUDIT_RETENTION_MONTHS` の既定は **0（消さない）**、
+  `AUDIT_PARTITION_AHEAD_MONTHS` は 12。
+
+### Changed（再発防止）
+
+- `scripts/verify-db.sh` の**明示列挙をやめた**。001〜029 を 1 行ずつ書いていたため
+  028 / 029 の追加時に漏れ、CI がその表を作らないまま緑になっていた。ファイル名順の
+  グロブに変え、030 以降も自動で入る。
+
+### Verification
+
+- `AI_TLS=1 python3 scripts/phase7-agent-loop-eval.py`: CA→葉の証明書を作り、
+  `transport={tls:true}` でツールループ・予算・心拍すべて通過。既定（http）も再実行して緑。
+- `verify-db.sh`: 001〜030 全通過。監査は「期限切れ分区を落とせる / 実際に消える /
+  `retention=0` で消さない / app から呼べない」の 4 点を実測。
+- worker 実測: `AUDIT_RETENTION_MONTHS=12` で起動 → `dropped:["audit_log_202001"]`。
+- fmt / clippy / test / OpenAPI 一致 / i18n 589 / build。
+
+## 2026-11-17 — 小清理（UI のハードコード / 死んだ契約フィールド）
+
+### Fixed
+
+- `IndexesPage` が埋め込みモデル名を 2 つ直書きしていた。`GET /projects/{pid}/embedding-models`
+  を追加し（`corpus.embedding_model` の `enabled` を返す）、UI はそこから選択肢を作る。
+  モデルが 1 つも無いときは作成ボタンを無効化し、`indexes.noModels` を表示する。
+- `TestPage` の「規約を抽出」が **サンプル 3 行を送っていた**（`SAMPLE_SOURCES`）。
+  ユーザーが入力したソースだけを送る編集 UI に置き換え。空のときは抽出ボタンを無効化。
+- `ApprovalView.run_id` は常に `NULL`（MCP 起票は `None`、Workflow 起票は
+  `workflow_run_id` 側）で、フロントの `run_id` 分岐も到達不能だった。契約と分岐を削除。
+  DB 列は残す（migration は forward-only、削除しても利点が無い）。
+
+### Unchanged（意図的に直さない）
+
+- graph rebuild / drift が Neo4j 未設定で 409 `CAPABILITY_UNSUPPORTED` を返すのは**正しい**。
+  Neo4j が無いのに再構築を「成功」と返すのは graceful ではなく**嘘**。メッセージは
+  「Neo4j projector が設定されていません」で原因が分かる。
+
+### Verification
+
+- `GET …/embedding-models` 実測: `[{local-hash-1024,rev 1,1024d},{local-hash-1024-v2,rev 2,1024d}]`。
+- `GET …/approvals` のレスポンスに `run_id` が無いことを実測。
+- ブラウザ煙試験（1440px）: 索引頁の選択肢 2 件 / 作成ボタン有効、規約頁は初期 1 行 +
+  追加で 2 行、抽出ボタンは未入力で無効・入力後に有効、`pageerror` / HTTP error 0。
+- fmt / clippy / test / OpenAPI 一致 / i18n 589 / build。
+
+## 2026-11-17 — 開発環境と文書の突き合わせ（残件）
+
+### Fixed
+
+- `docker-compose.yml` の initdb が **024 で止まっていた**。025〜029 の 5 本を
+  追加し、28 本（001〜019 / 021〜024 / 025〜029）を番号順に、
+  `roles.sql` を最後（90）に置く形へ揃えた。A-01 の `docker compose up` 経路でも
+  028 / 029 の表（`graph_meta.projection_drift`、`core.rate_limit_bucket`、
+  `project_member.role_source`、`outbox_event.locked_by/locked_until`）が作られる。
+- `docs/phase3/acceptance.md`: 「改版切替の tombstone = 未実装」は**失実**だった。
+  `POST …/revisions/{rid}:activate` → `supersede_document_revision` →
+  `DocumentRevisionSuperseded` → projector が旧版ノードを削除、まで実装済み。
+  `scripts/phase2-revision-eval.py` で実測（旧版 Neo4j 0 / 新版 101 /
+  PG tombstone 101 / superseded publish 1 / 監査 1）。
+- `docs/phase6/acceptance.md`: `NEEDS_CLARIFICATION` と Q-01 の
+  SSE / Markdown / PDF を「未実装」と書いていたが、どちらも Phase 5 で完了済み。
+  実装済みへ改め、Phase 5 受入への参照を付けた。
+
+### Verification
+
+- `scripts/verify-db.sh`（001〜029）全通過。
+- `scripts/phase2-revision-eval.py` 全通過（上の実測値。Neo4j 込み）。
+- `docker-compose.yml`: YAML パース + initdb 29 ファイル（28 マイグレーション +
+  roles）の順序を機械検査。**compose 自体は未起動**（開発機に Docker 無し）。
+- fmt / clippy / test / OpenAPI 一致 / i18n 583 / build。
+
 ## 2026-11-08 — Azure Database for PostgreSQL 対応
 
 ### Changed（設計）
