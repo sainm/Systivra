@@ -610,5 +610,9 @@
   "ontology.closeDraft": "关闭草稿",
   "ontology.addRelation": "添加关系类型",
   "ontology.sourceTypes": "起点类型（逗号分隔，* 表示任意）",
-  "ontology.targetTypes": "终点类型（逗号分隔，* 表示任意）"
+  "ontology.targetTypes": "终点类型（逗号分隔，* 表示任意）",
+  "ontology.edit": "编辑",
+  "ontology.update": "更新",
+  "ontology.cancel": "取消",
+  "ontology.transitive": "传递"
 }

@@ -38,6 +38,10 @@ export function OntologyPage({
   const [relationDisplay, setRelationDisplay] = useState("");
   const [relationSource, setRelationSource] = useState("");
   const [relationTarget, setRelationTarget] = useState("");
+  const [relationCardinality, setRelationCardinality] = useState("N:M");
+  // 編集中の行。名前はキーなので変更させない（変えたいときは追加＋削除）。
+  const [editingType, setEditingType] = useState<string | null>(null);
+  const [editingRelation, setEditingRelation] = useState<string | null>(null);
 
   async function load() {
     try {
@@ -80,6 +84,8 @@ export function OntologyPage({
       setDraft(updated);
       setTypeName("");
       setTypeDisplay("");
+      setTypeParent("");
+      setEditingType(null);
       setNotice(t("ontology.addType"));
     } catch (cause) {
       setError(cause);
@@ -98,6 +104,35 @@ export function OntologyPage({
     } finally {
       setBusy(false);
     }
+  }
+
+  function editType(type: OntologyResponse["entity_types"][number]) {
+    setEditingType(type.name);
+    setTypeName(type.name);
+    setTypeDisplay(type.display_name_ja);
+    setTypeParent(type.parent_type ?? "");
+  }
+
+  function editRelation(type: OntologyResponse["relation_types"][number]) {
+    setEditingRelation(type.name);
+    setRelationName(type.name);
+    setRelationDisplay(type.display_name_ja);
+    setRelationSource(type.source_types.join(", "));
+    setRelationTarget(type.target_types.join(", "));
+    setRelationCardinality(type.cardinality);
+  }
+
+  function cancelEdit() {
+    setEditingType(null);
+    setEditingRelation(null);
+    setTypeName("");
+    setTypeDisplay("");
+    setTypeParent("");
+    setRelationName("");
+    setRelationDisplay("");
+    setRelationSource("");
+    setRelationTarget("");
+    setRelationCardinality("N:M");
   }
 
   async function addRelation() {
@@ -119,7 +154,7 @@ export function OntologyPage({
           display_name_ja: relationDisplay.trim(),
           source_types: source.length > 0 ? source : ["*"],
           target_types: target.length > 0 ? target : ["*"],
-          cardinality: "N:M",
+          cardinality: relationCardinality,
           is_transitive: false,
         }),
       );
@@ -127,6 +162,8 @@ export function OntologyPage({
       setRelationDisplay("");
       setRelationSource("");
       setRelationTarget("");
+      setRelationCardinality("N:M");
+      setEditingRelation(null);
       setNotice(t("ontology.addRelation"));
     } catch (cause) {
       setError(cause);
@@ -241,6 +278,9 @@ export function OntologyPage({
                 className="input"
                 placeholder={t("ontology.name")}
                 value={typeName}
+                // 名前はキー。変えると「別の型を作って古いのを消す」になるので、
+                // 編集中は固定する。
+                disabled={editingType !== null}
                 onChange={(event) => setTypeName(event.target.value)}
               />
               <input
@@ -256,14 +296,20 @@ export function OntologyPage({
                 onChange={(event) => setTypeParent(event.target.value)}
               />
               <button className="btn btn-primary" onClick={() => void addType()} disabled={busy}>
-                {t("ontology.addType")}
+                {editingType ? t("ontology.update") : t("ontology.addType")}
               </button>
+              {editingType ? (
+                <button className="btn btn-ghost" onClick={cancelEdit}>
+                  {t("ontology.cancel")}
+                </button>
+              ) : null}
             </div>
             <div className="filters">
               <input
                 className="input"
                 placeholder={t("ontology.name")}
                 value={relationName}
+                disabled={editingRelation !== null}
                 onChange={(event) => setRelationName(event.target.value)}
               />
               <input
@@ -284,9 +330,24 @@ export function OntologyPage({
                 value={relationTarget}
                 onChange={(event) => setRelationTarget(event.target.value)}
               />
+              <select
+                className="input"
+                value={relationCardinality}
+                onChange={(event) => setRelationCardinality(event.target.value)}
+              >
+                <option value="N:M">N:M</option>
+                <option value="1:N">1:N</option>
+                <option value="N:1">N:1</option>
+                <option value="1:1">1:1</option>
+              </select>
               <button className="btn" onClick={() => void addRelation()} disabled={busy}>
-                {t("ontology.addRelation")}
+                {editingRelation ? t("ontology.update") : t("ontology.addRelation")}
               </button>
+              {editingRelation ? (
+                <button className="btn btn-ghost" onClick={cancelEdit}>
+                  {t("ontology.cancel")}
+                </button>
+              ) : null}
             </div>
           </div>
         ) : null}
@@ -316,6 +377,13 @@ export function OntologyPage({
                       <td>{type.parent_type ?? "-"}</td>
                       {draft ? (
                         <td>
+                          <button
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => editType(type)}
+                            disabled={busy}
+                          >
+                            {t("ontology.edit")}
+                          </button>
                           <button
                             className="btn btn-ghost btn-sm"
                             onClick={() => void removeType(type.name)}
@@ -358,6 +426,13 @@ export function OntologyPage({
                       </td>
                       {draft ? (
                         <td>
+                          <button
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => editRelation(type)}
+                            disabled={busy}
+                          >
+                            {t("ontology.edit")}
+                          </button>
                           <button
                             className="btn btn-ghost btn-sm"
                             onClick={() => void removeRelation(type.name)}

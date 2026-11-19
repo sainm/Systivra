@@ -610,5 +610,9 @@
   "ontology.closeDraft": "編集を閉じる",
   "ontology.addRelation": "関係型を追加",
   "ontology.sourceTypes": "始点の型（カンマ区切り、* で任意）",
-  "ontology.targetTypes": "終点の型（カンマ区切り、* で任意）"
+  "ontology.targetTypes": "終点の型（カンマ区切り、* で任意）",
+  "ontology.edit": "編集",
+  "ontology.update": "更新",
+  "ontology.cancel": "取消",
+  "ontology.transitive": "推移的"
 }

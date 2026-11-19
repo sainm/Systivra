@@ -610,5 +610,9 @@
   "ontology.closeDraft": "Close draft",
   "ontology.addRelation": "Add relation type",
   "ontology.sourceTypes": "Source types (comma separated, * for any)",
-  "ontology.targetTypes": "Target types (comma separated, * for any)"
+  "ontology.targetTypes": "Target types (comma separated, * for any)",
+  "ontology.edit": "Edit",
+  "ontology.update": "Update",
+  "ontology.cancel": "Cancel",
+  "ontology.transitive": "Transitive"
 }
