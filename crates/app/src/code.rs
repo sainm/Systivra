@@ -512,10 +512,20 @@ impl App {
             .code_repository(&mut tx, project.0, repository_id)
             .await?
             .ok_or(AppError::NotFound(ErrorCode::NotFound))?;
-        let parent = self
+        // 増分の基準は「解析に成功した」revision に限る。失敗した revision を
+        // 基準にすると全ファイルが変更なし扱いになり、0 シンボルで「成功」する。
+        let parent = match self
             .store()
-            .latest_code_revision(&mut tx, project.0, repository_id)
-            .await?;
+            .latest_analyzed_code_revision(&mut tx, project.0, repository_id)
+            .await?
+        {
+            Some(row) => Some(row),
+            None => {
+                self.store()
+                    .latest_code_revision(&mut tx, project.0, repository_id)
+                    .await?
+            }
+        };
         store::commit(tx).await?;
 
         let (root, workdir) =
@@ -648,6 +658,20 @@ impl App {
                 .await?;
             copied_symbols = copied.0;
             copied_facts = copied.1;
+        }
+        // **写すものが無いのに「変更なし」を信じない。**
+        // 基準 revision の解析が空（失敗した、または 0 シンボルで終わった）だと、
+        // 全ファイルが「変更なし」になり 0 シンボルのまま成功してしまう。
+        // その場合は全量として解析し直す。
+        let mut changed = changed;
+        if copied_symbols == 0 && copied_facts == 0 && changed.len() < source_files.len() {
+            tracing::warn!(
+                files = source_files.len(),
+                changed = changed.len(),
+                "基準 revision に解析結果が無いため全量を解析し直します"
+            );
+            changed = source_files.iter().map(|file| file.path.clone()).collect();
+            caller_paths.clear();
         }
         store::commit(tx).await?;
 

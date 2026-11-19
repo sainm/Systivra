@@ -63,9 +63,18 @@ class Client:
         request = urllib.request.Request(f"{BASE_URL}/api/v1{path}", method=method)
         try:
             with self.opener.open(request, timeout=30) as response:
-                return response.status, response.read().decode("utf-8"), dict(response.headers)
+                return (
+                    response.status,
+                    response.read().decode("utf-8"),
+                    # サーバーは小文字で返す。**キーの大小で取りこぼさない**よう正規化する。
+                    {k.lower(): v for k, v in response.headers.items()},
+                )
         except urllib.error.HTTPError as error:
-            return error.code, error.read().decode("utf-8", "replace"), dict(error.headers)
+            return (
+                error.code,
+                error.read().decode("utf-8", "replace"),
+                {k.lower(): v for k, v in error.headers.items()},
+            )
 
     def must(self, method: str, path: str, body: dict | None = None) -> dict:
         status, payload = self.call(method, path, body)
@@ -737,7 +746,7 @@ def main() -> int:
         "GET", f"/projects/{pid}/workflows/{workflow['id']}/export?format=yaml"
     )
     assert status_yaml == 200, (status_yaml, yaml_text)
-    assert "yaml" in yaml_headers.get("Content-Type", "").lower(), yaml_headers
+    assert "yaml" in yaml_headers.get("content-type", "").lower(), yaml_headers
     assert "code:" in yaml_text and "edges:" in yaml_text, yaml_text[:120]
     REPORT["workflow_export"] = {"json": status, "yaml": status_yaml}
 

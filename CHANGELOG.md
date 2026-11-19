@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-11-19 — 既存の縦断受入を通し、実際に 2 件のバグを直した
+
+Phase 5（問詢）/ 6（テスト）/ 7（Agent・MCP・Workflow）を通しで実行した。
+3 本とも通過したが、その過程で**実装のバグ 2 件**が出た。
+
+### Fixed 1: 関係の外部キー違反（コード解析が丸ごと落ちる）
+
+`project_code_facts_to_graph` は関係の端点 id を `code_entity_id(...)`（v5）で
+計算していたが、**記号投影は `gen_random_uuid()`** で実体を作る。同じ
+`(entity_type, natural_key)` が既にあると upsert は既存行を更新するだけで、
+計算した id の行は生まれない → `relationship_dst_id_fkey` 違反で解析全体が失敗。
+
+- 実体 upsert 後に `(entity_type, natural_key)` で id を引き直し、その id で関係を張る。
+- 発端は JSP scriptlet の CALLS 事実（`Method:...` が記号投影側と衝突）。
+
+### Fixed 2: 解析が失敗していても「成功・0 シンボル」になる
+
+増分解析の基準に**解析に失敗した revision**を使っていたため、全ファイルが
+「変更なし」と判定され、写すものが無いまま `SUCCEEDED / symbols 0` で終わっていた
+（後続の同内容 revision も連鎖して 0 になる）。
+
+- 基準は「解析に成功した最新 revision」を優先。
+- さらに、写したシンボルも事実も 0 件なら**全量として解析し直す**（警告ログ付き）。
+  失敗した revision が残っていても自己回復する。
+- 実測: 12 ファイル / 45 シンボル / 91 事実まで回復。
+
+### 受入結果
+
+- `phase5-inquiry-eval`: `entity` 21 コード / 22 テスト（`test_coverage_partial:19`）、
+  `NOT_FOUND_SEED` 維持、冪等 OK、`diff` 20 件。
+- `phase7-eval`: Workflow 承認 → 実行、孤立 node 400、書き出し json/yaml 200、監査 32 行。
+- `phase6-test-eval`: 通過。
+- テスト側の不具合も 1 件修正: HTTP ヘッダは小文字で返るため、`Content-Type` で
+  引くと None になる（`raw()` で小文字化）。
+
 ## 2026-11-19 — Ontology 画面の受入をスクリプト化
 
 ### Added

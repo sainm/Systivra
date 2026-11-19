@@ -345,6 +345,35 @@ impl Store {
         Ok(row.as_ref().map(code_revision_row))
     }
 
+    /// 解析に成功した最新の revision。
+    ///
+    /// 増分解析の基準に「解析が失敗した revision」を使うと、全ファイルが
+    /// 「変更なし」と判定されて写すものが無く、**0 シンボルのまま成功**する。
+    pub async fn latest_analyzed_code_revision(
+        &self,
+        tx: &mut Tx<'_>,
+        project_id: Uuid,
+        repository_id: Uuid,
+    ) -> Result<Option<CodeRevisionRow>, StoreError> {
+        let row = sqlx::query(
+            "SELECT r.* FROM code.code_revision r
+               JOIN LATERAL (
+                 SELECT status FROM code.analysis_run a
+                  WHERE a.revision_id = r.id
+                  ORDER BY a.created_at DESC
+                  LIMIT 1
+               ) a ON true
+              WHERE r.project_id = $1 AND r.repository_id = $2 AND a.status = 'SUCCEEDED'
+              ORDER BY r.created_at DESC
+              LIMIT 1",
+        )
+        .bind(project_id)
+        .bind(repository_id)
+        .fetch_optional(&mut **tx)
+        .await?;
+        Ok(row.as_ref().map(code_revision_row))
+    }
+
     pub async fn latest_code_revision(
         &self,
         tx: &mut Tx<'_>,
@@ -1283,8 +1312,8 @@ impl Store {
         )
         .bind(first.project_id)
         .bind(entity_ids)
-        .bind(entity_types)
-        .bind(natural_keys)
+        .bind(&entity_types)
+        .bind(&natural_keys)
         .bind(names)
         .bind(entity_resolutions)
         .bind(entity_fact_ids)
@@ -1305,13 +1334,47 @@ impl Store {
                 )
             })
             .collect::<Vec<_>>();
+        // **実体の id は「計算値」と一致するとは限らない。**
+        // 既存の実体が別経路（記号投影は gen_random_uuid）で作られていると、
+        // ON CONFLICT は既存行を更新するだけで、計算した id の行は生まれない。
+        // その id で関係を挿すと外部キー違反になるので、upsert 後に引き直す。
+        let actual_ids = sqlx::query(
+            "SELECT entity_type, natural_key, id FROM graph_meta.entity
+              WHERE project_id = $1
+                AND (entity_type, natural_key) IN (
+                  SELECT * FROM unnest($2::text[], $3::text[])
+                )",
+        )
+        .bind(first.project_id)
+        .bind(&entity_types)
+        .bind(&natural_keys)
+        .fetch_all(&mut **tx)
+        .await?
+        .iter()
+        .map(|row| {
+            (
+                (
+                    row.get::<String, _>("entity_type"),
+                    row.get::<String, _>("natural_key"),
+                ),
+                row.get::<Uuid, _>("id"),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+        let resolve = |kind: &str, key: &str| {
+            actual_ids
+                .get(&(kind.to_string(), key.to_string()))
+                .copied()
+                .unwrap_or_else(|| code_entity_id(first.project_id, kind, key))
+        };
         let src_ids = facts
             .iter()
-            .map(|fact| code_entity_id(fact.project_id, &fact.subject_kind, &fact.subject_key))
+            .map(|fact| resolve(&fact.subject_kind, &fact.subject_key))
             .collect::<Vec<_>>();
         let dst_ids = facts
             .iter()
-            .map(|fact| code_entity_id(fact.project_id, &fact.object_kind, &fact.object_key))
+            .map(|fact| resolve(&fact.object_kind, &fact.object_key))
             .collect::<Vec<_>>();
         let rel_types = facts
             .iter()
