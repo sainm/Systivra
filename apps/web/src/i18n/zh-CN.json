@@ -607,5 +607,8 @@
   "ontology.publishDraft": "发布该版本",
   "ontology.deleteType": "删除",
   "ontology.draftHint": "编辑只作用于草稿版本，公开视图要发布后才会变化。",
-  "ontology.closeDraft": "关闭草稿"
+  "ontology.closeDraft": "关闭草稿",
+  "ontology.addRelation": "添加关系类型",
+  "ontology.sourceTypes": "起点类型（逗号分隔，* 表示任意）",
+  "ontology.targetTypes": "终点类型（逗号分隔，* 表示任意）"
 }

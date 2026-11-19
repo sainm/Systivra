@@ -59,6 +59,8 @@ use utoipa::OpenApi;
         crate::routes::graph::ontology_draft,
         crate::routes::graph::upsert_entity_type,
         crate::routes::graph::delete_entity_type,
+        crate::routes::graph::upsert_relation_type,
+        crate::routes::graph::delete_relation_type,
         crate::routes::graph::entities,
         crate::routes::graph::neighbors,
         crate::routes::graph::subgraph,

@@ -1,5 +1,55 @@
 # Changelog
 
+## 2026-11-19 — Ontology の関係型編集
+
+### Added
+
+- `PUT /graph/ontology/relation-types` と `DELETE …/relation-types/{name}`。
+  DRAFT に対して関係型を追加・更新・削除できる（実体型と同じ扱い）。
+- 検証: `name` は大文字始まりの英数字/_、`cardinality` は `1:1 / 1:N / N:1 / N:M`、
+  端点は DRAFT に存在する実体型か `*`（既存データの「任意」表記）。
+- UI: 編集中の版にだけ関係型のフォームと削除ボタンを出す。端点が空なら `*` として送る。
+
+### Verification
+
+- 単体: `accepts_relation_between_existing_types` / `rejects_unknown_endpoint_type` /
+  `rejects_bad_cardinality_and_empty_endpoints` / `rejects_bad_relation_names`。
+- API 実測: 追加で 27→28 件、削除で 27 件、存在しない名前は 404、
+  未知の端点 400、`cardinality=many` 400。
+- fmt / clippy / test / OpenAPI 一致 / i18n 612 / build。
+
+## 2026-11-19 — RAG シードを既定で有効化（閾値と実体抽出つき）
+
+### Changed
+
+- `SEED_RAG` を**既定で有効**にした（`SEED_RAG=0` で無効）。前回 OFF にした理由は
+  「汎用語だけで候補が立つ」だったが、原因はスコアの足切りが無かったことだった。
+- 候補の作り方を変えた: 文書そのものをシードにしない。`Document` からはコードへ
+  辿れず、**影響 0 件のレポートが「成功」として出る**（実測で確認）。
+  代わりに、ヒットした本文（最大 8,000 文字）に**名前が出てくる実体**を拾い、
+  `Document` / `Section` を除いたものを候補にする。
+
+### Threshold
+
+- `search_lexical` の `score`（ts_rank）で 3.0 未満を落とす。
+  実測（100 chunk）: 実質問 6.2 / 7.4、無関係な質問 1.4 / 1.6。
+  コーパスや文書長で変わる値なので、**変えるときは測り直す**こと。
+
+### Verification
+
+- `kept` の実測: 「今日の天気を教えて」→ hits=20, kept=0（`NOT_FOUND_SEED`）、
+  「住所の入力桁数を30文字に変えたい」→ hits=20, kept=20。
+- 文書だけの検証 DB では、名前一致もコード実体も無いため候補 0 件 → `NOT_FOUND_SEED`
+  （文書シードで「成功だが空」より正しい）。
+- 一時的に `Field:重複チェック`（本文に出る名前）を置くと、質問
+  「同じ顧客を二重に登録しない方法は？」（名前に含まれない）で候補化されることを確認。
+  確認後にエンティティは削除済み。
+
+### 訂正（2 回目）
+
+前回「ベクトルは順位信号にならない（実測 0.016）」と書いたが、これは検索 API が返す
+**RRF 後の値**だった。生のスコアは質問ごとに差があり、今回の閾値はその実測に基づく。
+
 ## 2026-11-18 — マイグレーション追平の仕組み
 
 ### Added

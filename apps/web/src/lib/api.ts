@@ -58,6 +58,7 @@ import type {
   NarrateImpactResponse,
   NarrateInquiryResponse,
   OntologyEntityType,
+  OntologyRelationType,
   OntologyResponse,
   ParseAcceptedResponse,
   Problem,
@@ -378,6 +379,26 @@ export function upsertOntologyEntityType(
   return request<OntologyResponse>(
     `/projects/${projectId}/graph/ontology/entity-types`,
     { method: "PUT", body: entityType },
+  );
+}
+
+export function upsertOntologyRelationType(
+  projectId: string,
+  relation: OntologyRelationType,
+): Promise<OntologyResponse> {
+  return request<OntologyResponse>(
+    `/projects/${projectId}/graph/ontology/relation-types`,
+    { method: "PUT", body: relation },
+  );
+}
+
+export function deleteOntologyRelationType(
+  projectId: string,
+  name: string,
+): Promise<OntologyResponse> {
+  return request<OntologyResponse>(
+    `/projects/${projectId}/graph/ontology/relation-types/${encodeURIComponent(name)}`,
+    { method: "DELETE" },
   );
 }
 

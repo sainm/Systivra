@@ -3476,6 +3476,111 @@
         }
       }
     },
+    "/api/v1/projects/{pid}/graph/ontology/relation-types": {
+      "put": {
+        "tags": [
+          "crate::routes::graph"
+        ],
+        "summary": "DRAFT に関係型を追加 / 更新する。",
+        "operationId": "upsert_relation_type",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OntologyRelationType"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OntologyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{pid}/graph/ontology/relation-types/{name}": {
+      "delete": {
+        "tags": [
+          "crate::routes::graph"
+        ],
+        "summary": "DRAFT から関係型を削除する。",
+        "operationId": "delete_relation_type",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Relation type name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OntologyResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{pid}/graph/path": {
       "get": {
         "tags": [

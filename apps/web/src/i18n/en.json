@@ -607,5 +607,8 @@
   "ontology.publishDraft": "Publish this draft",
   "ontology.deleteType": "Delete",
   "ontology.draftHint": "Edits apply to the draft only. The published view changes when you publish.",
-  "ontology.closeDraft": "Close draft"
+  "ontology.closeDraft": "Close draft",
+  "ontology.addRelation": "Add relation type",
+  "ontology.sourceTypes": "Source types (comma separated, * for any)",
+  "ontology.targetTypes": "Target types (comma separated, * for any)"
 }

@@ -607,5 +607,8 @@
   "ontology.publishDraft": "この版を公開",
   "ontology.deleteType": "削除",
   "ontology.draftHint": "編集は編集中の版にだけ反映されます。公開するまで表示は変わりません。",
-  "ontology.closeDraft": "編集を閉じる"
+  "ontology.closeDraft": "編集を閉じる",
+  "ontology.addRelation": "関係型を追加",
+  "ontology.sourceTypes": "始点の型（カンマ区切り、* で任意）",
+  "ontology.targetTypes": "終点の型（カンマ区切り、* で任意）"
 }

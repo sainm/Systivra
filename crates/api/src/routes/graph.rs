@@ -8,8 +8,8 @@ use contracts::{
     ErrorCode, GraphEntityQuery, GraphEntitySearchResponse, GraphNeighborsQuery,
     GraphNeighborsResponse, GraphPathQuery, GraphPathResponse, GraphRebuildAbortResponse,
     GraphRebuildResponse, GraphStatsResponse, GraphSubgraphQuery, GraphSubgraphResponse,
-    GraphTraceabilityQuery, OntologyEntityType, OntologyResponse, PublishOntologyRequest,
-    PublishOntologyResponse, TraceabilityResponse,
+    GraphTraceabilityQuery, OntologyEntityType, OntologyRelationType, OntologyResponse,
+    PublishOntologyRequest, PublishOntologyResponse, TraceabilityResponse,
 };
 use uuid::Uuid;
 
@@ -36,6 +36,14 @@ pub fn router() -> Router<ApiState> {
         .route(
             "/api/v1/projects/{pid}/graph/ontology/entity-types/{name}",
             axum::routing::delete(delete_entity_type),
+        )
+        .route(
+            "/api/v1/projects/{pid}/graph/ontology/relation-types",
+            axum::routing::put(upsert_relation_type),
+        )
+        .route(
+            "/api/v1/projects/{pid}/graph/ontology/relation-types/{name}",
+            axum::routing::delete(delete_relation_type),
         )
         .route(
             "/api/v1/projects/{pid}/graph/ontology/publish",
@@ -178,6 +186,60 @@ pub(crate) async fn delete_entity_type(
     let response = state
         .app
         .delete_ontology_entity_type(&auth, scope.project, &name)
+        .await
+        .map_err(|error| ApiError::from_app(error, &trace))?;
+    Ok(Json(response))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/v1/projects/{pid}/graph/ontology/relation-types",
+    params(("pid" = uuid::Uuid, Path, description = "Project ID")),
+    request_body = OntologyRelationType,
+    responses(
+        (status = 200, body = OntologyResponse),
+        (status = 400, body = contracts::Problem)
+    )
+)]
+/// DRAFT に関係型を追加 / 更新する。
+pub(crate) async fn upsert_relation_type(
+    State(state): State<ApiState>,
+    scope: ProjectScope,
+    Extension(trace): Extension<TraceId>,
+    Extension(auth): Extension<Authenticated>,
+    Json(relation): Json<OntologyRelationType>,
+) -> Result<Json<OntologyResponse>, ApiError> {
+    let response = state
+        .app
+        .upsert_ontology_relation_type(&auth, scope.project, relation)
+        .await
+        .map_err(|error| ApiError::from_app(error, &trace))?;
+    Ok(Json(response))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/projects/{pid}/graph/ontology/relation-types/{name}",
+    params(
+        ("pid" = uuid::Uuid, Path, description = "Project ID"),
+        ("name" = String, Path, description = "Relation type name")
+    ),
+    responses(
+        (status = 200, body = OntologyResponse),
+        (status = 404, body = contracts::Problem)
+    )
+)]
+/// DRAFT から関係型を削除する。
+pub(crate) async fn delete_relation_type(
+    State(state): State<ApiState>,
+    scope: ProjectScope,
+    Extension(trace): Extension<TraceId>,
+    Extension(auth): Extension<Authenticated>,
+    Path((_pid, name)): Path<(String, String)>,
+) -> Result<Json<OntologyResponse>, ApiError> {
+    let response = state
+        .app
+        .delete_ontology_relation_type(&auth, scope.project, &name)
         .await
         .map_err(|error| ApiError::from_app(error, &trace))?;
     Ok(Json(response))

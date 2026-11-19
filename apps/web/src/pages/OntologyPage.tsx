@@ -5,9 +5,11 @@ import { ErrorNotice } from "../components/ui";
 import {
   createOntologyDraft,
   deleteOntologyEntityType,
+  deleteOntologyRelationType,
   getOntology,
   publishOntology,
   upsertOntologyEntityType,
+  upsertOntologyRelationType,
 } from "../lib/api";
 import type { Me, Membership, OntologyResponse } from "../lib/types";
 import { useT } from "../i18n";
@@ -32,6 +34,10 @@ export function OntologyPage({
   const [typeName, setTypeName] = useState("");
   const [typeDisplay, setTypeDisplay] = useState("");
   const [typeParent, setTypeParent] = useState("");
+  const [relationName, setRelationName] = useState("");
+  const [relationDisplay, setRelationDisplay] = useState("");
+  const [relationSource, setRelationSource] = useState("");
+  const [relationTarget, setRelationTarget] = useState("");
 
   async function load() {
     try {
@@ -87,6 +93,53 @@ export function OntologyPage({
     setError(null);
     try {
       setDraft(await deleteOntologyEntityType(pid, name));
+    } catch (cause) {
+      setError(cause);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addRelation() {
+    if (!relationName.trim() || !relationDisplay.trim()) return;
+    // カンマ（と読点）区切り。空なら `*`（任意の型）として送る。
+    const split = (value: string) =>
+      value
+        .split(/[,、]/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+    const source = split(relationSource);
+    const target = split(relationTarget);
+    setBusy(true);
+    setError(null);
+    try {
+      setDraft(
+        await upsertOntologyRelationType(pid, {
+          name: relationName.trim(),
+          display_name_ja: relationDisplay.trim(),
+          source_types: source.length > 0 ? source : ["*"],
+          target_types: target.length > 0 ? target : ["*"],
+          cardinality: "N:M",
+          is_transitive: false,
+        }),
+      );
+      setRelationName("");
+      setRelationDisplay("");
+      setRelationSource("");
+      setRelationTarget("");
+      setNotice(t("ontology.addRelation"));
+    } catch (cause) {
+      setError(cause);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeRelation(name: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      setDraft(await deleteOntologyRelationType(pid, name));
     } catch (cause) {
       setError(cause);
     } finally {
@@ -206,6 +259,35 @@ export function OntologyPage({
                 {t("ontology.addType")}
               </button>
             </div>
+            <div className="filters">
+              <input
+                className="input"
+                placeholder={t("ontology.name")}
+                value={relationName}
+                onChange={(event) => setRelationName(event.target.value)}
+              />
+              <input
+                className="input"
+                placeholder={t("ontology.displayName")}
+                value={relationDisplay}
+                onChange={(event) => setRelationDisplay(event.target.value)}
+              />
+              <input
+                className="input"
+                placeholder={t("ontology.sourceTypes")}
+                value={relationSource}
+                onChange={(event) => setRelationSource(event.target.value)}
+              />
+              <input
+                className="input"
+                placeholder={t("ontology.targetTypes")}
+                value={relationTarget}
+                onChange={(event) => setRelationTarget(event.target.value)}
+              />
+              <button className="btn" onClick={() => void addRelation()} disabled={busy}>
+                {t("ontology.addRelation")}
+              </button>
+            </div>
           </div>
         ) : null}
       </div>
@@ -261,14 +343,30 @@ export function OntologyPage({
                     <th>{t("ontology.name")}</th>
                     <th>{t("ontology.displayName")}</th>
                     <th>{t("ontology.cardinality")}</th>
+                    <th>{t("ontology.sourceTypes")}</th>
+                    {draft ? <th /> : null}
                   </tr>
                 </thead>
                 <tbody>
-                  {ontology.relation_types.map((type) => (
+                  {(draft ?? ontology).relation_types.map((type) => (
                     <tr key={type.name}>
                       <td className="mono">{type.name}</td>
                       <td>{type.display_name_ja}</td>
                       <td>{type.cardinality}</td>
+                      <td className="mono">
+                        {type.source_types.join(",")} → {type.target_types.join(",")}
+                      </td>
+                      {draft ? (
+                        <td>
+                          <button
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => void removeRelation(type.name)}
+                            disabled={busy}
+                          >
+                            {t("ontology.deleteType")}
+                          </button>
+                        </td>
+                      ) : null}
                     </tr>
                   ))}
                 </tbody>

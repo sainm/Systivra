@@ -46,6 +46,7 @@ export type GraphSubgraphResponse = Schemas["GraphSubgraphResponse"];
 export type GraphPathResponse = Schemas["GraphPathResponse"];
 export type TraceabilityResponse = Schemas["TraceabilityResponse"];
 export type OntologyEntityType = Schemas["OntologyEntityType"];
+export type OntologyRelationType = Schemas["OntologyRelationType"];
 export type OntologyResponse = Schemas["OntologyResponse"];
 export type GraphStatsResponse = Schemas["GraphStatsResponse"];
 export type GraphRebuildResponse = Schemas["GraphRebuildResponse"];

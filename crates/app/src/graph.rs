@@ -409,6 +409,91 @@ impl App {
         })
     }
 
+    /// DRAFT に関係型を追加 / 更新する。
+    pub async fn upsert_ontology_relation_type(
+        &self,
+        auth: &Authenticated,
+        project: ProjectId,
+        relation: contracts::OntologyRelationType,
+    ) -> Result<contracts::OntologyResponse, AppError> {
+        self.require_ontology_write(auth, project).await?;
+        let mut tx = self.store().begin_scoped(project).await?;
+        let Some((version_id, label)) = self.store().ontology_draft(&mut tx).await? else {
+            return Err(AppError::Validation(
+                "編集中の版がありません。先に DRAFT を作ってください".into(),
+            ));
+        };
+        let (entity_json, _relation_json) =
+            self.store().ontology_types(&mut tx, version_id).await?;
+        let entities: Vec<contracts::OntologyEntityType> = serde_json::from_value(entity_json)
+            .map_err(|error| AppError::Validation(error.to_string()))?;
+        validate_relation_type(&entities, &relation)?;
+        self.store()
+            .upsert_ontology_relation_type(
+                &mut tx,
+                version_id,
+                &store::OntologyRelationTypeDraft {
+                    name: relation.name.clone(),
+                    display_name_ja: relation.display_name_ja.clone(),
+                    source_types: relation.source_types.clone(),
+                    target_types: relation.target_types.clone(),
+                    cardinality: relation.cardinality.clone(),
+                    is_transitive: relation.is_transitive,
+                    properties_schema: serde_json::json!({}),
+                },
+            )
+            .await?;
+        let (entity_json, relation_json) = self.store().ontology_types(&mut tx, version_id).await?;
+        store::commit(tx).await?;
+        Ok(contracts::OntologyResponse {
+            id: Some(version_id),
+            version: label,
+            status: "DRAFT".into(),
+            published_at: None,
+            entity_types: serde_json::from_value(entity_json)
+                .map_err(|error| AppError::Validation(error.to_string()))?,
+            relation_types: serde_json::from_value(relation_json)
+                .map_err(|error| AppError::Validation(error.to_string()))?,
+        })
+    }
+
+    /// DRAFT から関係型を削除する。
+    pub async fn delete_ontology_relation_type(
+        &self,
+        auth: &Authenticated,
+        project: ProjectId,
+        name: &str,
+    ) -> Result<contracts::OntologyResponse, AppError> {
+        self.require_ontology_write(auth, project).await?;
+        let mut tx = self.store().begin_scoped(project).await?;
+        let Some((version_id, label)) = self.store().ontology_draft(&mut tx).await? else {
+            return Err(AppError::Validation(
+                "編集中の版がありません。先に DRAFT を作ってください".into(),
+            ));
+        };
+        let (_, relation_json) = self.store().ontology_types(&mut tx, version_id).await?;
+        let relations: Vec<contracts::OntologyRelationType> = serde_json::from_value(relation_json)
+            .map_err(|error| AppError::Validation(error.to_string()))?;
+        if !relations.iter().any(|item| item.name == name) {
+            return Err(AppError::NotFound(ErrorCode::NotFound));
+        }
+        self.store()
+            .delete_ontology_relation_type(&mut tx, version_id, name)
+            .await?;
+        let (entity_json, relation_json) = self.store().ontology_types(&mut tx, version_id).await?;
+        store::commit(tx).await?;
+        Ok(contracts::OntologyResponse {
+            id: Some(version_id),
+            version: label,
+            status: "DRAFT".into(),
+            published_at: None,
+            entity_types: serde_json::from_value(entity_json)
+                .map_err(|error| AppError::Validation(error.to_string()))?,
+            relation_types: serde_json::from_value(relation_json)
+                .map_err(|error| AppError::Validation(error.to_string()))?,
+        })
+    }
+
     async fn require_ontology_write(
         &self,
         auth: &Authenticated,
@@ -1020,5 +1105,134 @@ mod ontology_tests {
     fn rejects_self_parent() {
         let existing = vec![ty("Artifact", None)];
         assert!(validate_entity_type(&existing, &ty("Artifact", Some("Artifact"))).is_err());
+    }
+}
+
+/// 関係型 1 件の妥当性。
+///
+/// 端点の型が無い関係を許すと、グラフの辺が存在しない型を指す。
+/// `*` は「任意の型」を表す既存データの書き方なので許可する。
+fn validate_relation_type(
+    entities: &[contracts::OntologyEntityType],
+    relation: &contracts::OntologyRelationType,
+) -> Result<(), AppError> {
+    let name = relation.name.trim();
+    if name.is_empty() || name.chars().count() > 64 {
+        return Err(AppError::Validation("name は 1〜64 文字です".into()));
+    }
+    let mut chars = name.chars();
+    if !chars.next().unwrap_or('a').is_ascii_uppercase() {
+        return Err(AppError::Validation(
+            "name は大文字で始めてください（例: REFERENCES）".into(),
+        ));
+    }
+    if !chars.all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err(AppError::Validation(
+            "name は英数字と _ だけにしてください".into(),
+        ));
+    }
+    let display = relation.display_name_ja.trim();
+    if display.is_empty() || display.chars().count() > 80 {
+        return Err(AppError::Validation(
+            "display_name_ja は 1〜80 文字です".into(),
+        ));
+    }
+    if !matches!(relation.cardinality.as_str(), "1:1" | "1:N" | "N:1" | "N:M") {
+        return Err(AppError::Validation(format!(
+            "cardinality は 1:1 / 1:N / N:1 / N:M のいずれかです: {}",
+            relation.cardinality
+        )));
+    }
+    for (label, types) in [
+        ("source_types", &relation.source_types),
+        ("target_types", &relation.target_types),
+    ] {
+        if types.is_empty() {
+            return Err(AppError::Validation(format!("{label} が空です")));
+        }
+        for item in types {
+            if item == "*" {
+                continue;
+            }
+            if !entities.iter().any(|entity| &entity.name == item) {
+                return Err(AppError::Validation(format!(
+                    "{label} に存在しない型があります: {item}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod relation_tests {
+    use super::*;
+    use contracts::{OntologyEntityType, OntologyRelationType};
+
+    fn entity(name: &str) -> OntologyEntityType {
+        OntologyEntityType {
+            name: name.into(),
+            display_name_ja: format!("{name} の表示名"),
+            parent_type: None,
+            is_abstract: false,
+            properties_schema: serde_json::json!({}),
+        }
+    }
+
+    fn relation(name: &str, source: &[&str], target: &[&str]) -> OntologyRelationType {
+        OntologyRelationType {
+            name: name.into(),
+            display_name_ja: format!("{name} の表示名"),
+            source_types: source.iter().map(|s| s.to_string()).collect(),
+            target_types: target.iter().map(|s| s.to_string()).collect(),
+            cardinality: "N:M".into(),
+            is_transitive: false,
+        }
+    }
+
+    #[test]
+    fn accepts_relation_between_existing_types() {
+        let entities = vec![entity("Screen"), entity("Field")];
+        assert!(
+            validate_relation_type(&entities, &relation("HAS_FIELD", &["Screen"], &["Field"]))
+                .is_ok()
+        );
+        // `*` は既存データの「任意」表記。
+        assert!(validate_relation_type(&entities, &relation("CONTAINS", &["*"], &["*"])).is_ok());
+    }
+
+    #[test]
+    fn rejects_unknown_endpoint_type() {
+        let entities = vec![entity("Screen")];
+        let error =
+            validate_relation_type(&entities, &relation("HAS_FIELD", &["Screen"], &["Ghost"]))
+                .expect_err("未知の端点は弾く");
+        assert!(format!("{error:?}").contains("存在しない型"));
+    }
+
+    #[test]
+    fn rejects_bad_cardinality_and_empty_endpoints() {
+        let entities = vec![entity("Screen")];
+        let mut bad = relation("HAS_FIELD", &["Screen"], &["Screen"]);
+        bad.cardinality = "many".into();
+        assert!(validate_relation_type(&entities, &bad).is_err());
+
+        let empty = relation("HAS_FIELD", &[], &["Screen"]);
+        assert!(validate_relation_type(&entities, &empty).is_err());
+    }
+
+    #[test]
+    fn rejects_bad_relation_names() {
+        let entities = vec![entity("Screen")];
+        assert!(validate_relation_type(
+            &entities,
+            &relation("has_field", &["Screen"], &["Screen"])
+        )
+        .is_err());
+        assert!(validate_relation_type(
+            &entities,
+            &relation("HAS-FIELD", &["Screen"], &["Screen"])
+        )
+        .is_err());
     }
 }

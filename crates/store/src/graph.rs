@@ -606,37 +606,6 @@ impl Store {
         Ok(rows.iter().map(entity_row).collect())
     }
 
-    /// 文書 ID から `Document` 実体を引く（RAG のシード用）。
-    ///
-    /// 実体の `natural_key` は **doc_node の id** であって文書 ID ではない
-    /// （`sync_document_nodes` が `properties.document_id` で文書に紐づける）。
-    /// chunk の本文に実体名が現れるとは限らない（Section 名と chunk 本文は
-    /// 一致しない）ので、名前一致ではなくこの構造的な対応を使う。
-    pub async fn graph_document_entities(
-        &self,
-        tx: &mut Tx<'_>,
-        project_id: Uuid,
-        document_ids: &[Uuid],
-    ) -> Result<Vec<GraphEntityRow>, StoreError> {
-        if document_ids.is_empty() {
-            return Ok(Vec::new());
-        }
-        let keys: Vec<String> = document_ids.iter().map(|id| id.to_string()).collect();
-        let rows = sqlx::query(
-            "SELECT id, entity_type, natural_key, name, qualified_name, revision, resolution,
-                    properties, projection_seq
-               FROM graph_meta.entity
-              WHERE project_id = $1 AND deleted_at IS NULL
-                AND entity_type = 'Document'
-                AND properties->>'document_id' = ANY($2)",
-        )
-        .bind(project_id)
-        .bind(&keys)
-        .fetch_all(&mut **tx)
-        .await?;
-        Ok(rows.iter().map(entity_row).collect())
-    }
-
     pub async fn graph_entity(
         &self,
         tx: &mut Tx<'_>,
@@ -1491,6 +1460,56 @@ impl Store {
         Ok(result.rows_affected() > 0)
     }
 
+    /// DRAFT の関係型を追加 / 更新する。
+    pub async fn upsert_ontology_relation_type(
+        &self,
+        tx: &mut Tx<'_>,
+        version_id: Uuid,
+        relation: &OntologyRelationTypeDraft,
+    ) -> Result<(), StoreError> {
+        sqlx::query(
+            "INSERT INTO graph_meta.relation_type
+               (ontology_version_id, name, display_name_ja, source_types, target_types,
+                cardinality, is_transitive, properties_schema)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             ON CONFLICT (ontology_version_id, name)
+             DO UPDATE SET display_name_ja = EXCLUDED.display_name_ja,
+                           source_types = EXCLUDED.source_types,
+                           target_types = EXCLUDED.target_types,
+                           cardinality = EXCLUDED.cardinality,
+                           is_transitive = EXCLUDED.is_transitive,
+                           properties_schema = EXCLUDED.properties_schema",
+        )
+        .bind(version_id)
+        .bind(&relation.name)
+        .bind(&relation.display_name_ja)
+        .bind(&relation.source_types)
+        .bind(&relation.target_types)
+        .bind(&relation.cardinality)
+        .bind(relation.is_transitive)
+        .bind(&relation.properties_schema)
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete_ontology_relation_type(
+        &self,
+        tx: &mut Tx<'_>,
+        version_id: Uuid,
+        name: &str,
+    ) -> Result<bool, StoreError> {
+        let result = sqlx::query(
+            "DELETE FROM graph_meta.relation_type
+              WHERE ontology_version_id = $1 AND name = $2",
+        )
+        .bind(version_id)
+        .bind(name)
+        .execute(&mut **tx)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     /// DRAFT を公開する。他の PUBLISHED は DEPRECATED に落とす。
     pub async fn promote_ontology_draft(
         &self,
@@ -1695,5 +1714,17 @@ pub struct OntologyEntityTypeDraft {
     pub display_name_ja: String,
     pub parent_type: Option<String>,
     pub is_abstract: bool,
+    pub properties_schema: serde_json::Value,
+}
+
+/// DRAFT へ書き込む関係型。契約（`contracts::OntologyRelationType`）と同じ形。
+#[derive(Debug, Clone)]
+pub struct OntologyRelationTypeDraft {
+    pub name: String,
+    pub display_name_ja: String,
+    pub source_types: Vec<String>,
+    pub target_types: Vec<String>,
+    pub cardinality: String,
+    pub is_transitive: bool,
     pub properties_schema: serde_json::Value,
 }

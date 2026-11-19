@@ -243,7 +243,7 @@ hub として展開を打ち切り、性能 chain は depth 0〜5 の 6 層を�
 | SSE `partial → done` | **PASS** | `text/event-stream`、`Last-Event-ID` 再開。5 段の順序と欠番を実測 |
 | 250 万 Fact / 6 ホップ性能 | **PASS（合成）** | 2,500,005 edge、frontier 限定、1.07s。全件ロードなし |
 | 本番 DB の impact report 保存形式 | **暫定** | `impact.assessment_draft.report` JSONB。大規模時は artifact へ退避 |
-| RAG 併用 seed | **実装（既定 OFF、`SEED_RAG=1` で有効）** | 設計（`detail/08` §2.3）は「RAG top20 + entity_search top20 → RRF」。`chunk → document_id → Document 実体` で候補化する。実体の `natural_key` は **doc_node の id** で、文書との対応は `properties.document_id`（`sync_document_nodes` が付ける）。名前一致は使わない — Section 名は chunk 本文と一致しない（実測 200 件すべて不一致）。**既定で無効**な理由: ローカル埋め込みは hashed bag-of-words で、語彙検索も汎用語（「画面」等）で当たるため、`SEED_RAG=1` では「今日の天気を教えて」でも候補が立ち `QUEUED` になる（実測）。無意味な質問で進むのは `detail/08` §2.2 の「最も危険な失敗」なので、既定は名前一致のみ。実埋め込みを入れた時点で既定 ON にする |
+| RAG 併用 seed | **実装（既定で有効、`SEED_RAG=0` で無効）** | 語彙検索で当たった本文（`ts_rank >= 3.0`）を最大 8,000 文字まで繋ぎ、**そこに名前が出てくる実体**を候補にする（`Document` / `Section` は除外 — 文書からはコードへ辿れず、影響が空になる）。閾値は実測で校正: 実質問 6.2 / 7.4、無関係な質問 1.4 / 1.6（100 chunk）。閾値が無いとどんな質問でも候補が立ち `NOT_FOUND_SEED` に到達しない。候補は確度 0.55、名前一致と重なれば +0.05。実測: 文書だけの検証 DB では候補 0 件（`NOT_FOUND_SEED`）、本文に名前が出る実体を 1 件置くと質問にその名前が無くても候補化されることを確認 |
 
 ---
 

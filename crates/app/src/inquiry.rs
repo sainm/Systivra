@@ -492,57 +492,78 @@ impl App {
             // 実体名が chunk 本文に現れるとは限らない（Section 名と本文は一致しない）ので、
             // **chunk → document_id → Document 実体**という構造的な対応で候補にする。
             //
-            // 取得は語彙検索を使う。ローカル埋め込みは hashed bag-of-words で、
-            // 任意の質問に対して top-k のスコアがほぼ一定（実測 0.016）になり、
-            // 順位付けの信号にならないため（`detail/08` の RRF は本来そちらを前提にしている）。
-            // **既定では無効。** 今のローカル埋め込み / 語彙検索では汎用語（「画面」など）だけで
-            // 候補が立ち、無意味な質問でも `NOT_FOUND_SEED` に到達しなくなる。
-            // 「勝手に進む」のが本機能で最も危険な失敗（detail/08 §2.2）なので、
-            // 実埋め込みを入れるまで `SEED_RAG=1` を明示したときだけ動かす。
-            let rag_enabled = std::env::var("SEED_RAG").ok().as_deref() == Some("1");
+            // 取得は語彙検索を使う。ローカル埋め込み（hashed bag-of-words）は
+            // 検索 API の score が RRF 後の値になり、順位の信号として読めないため。
+            // 語彙検索の ts_rank は質問の意味の近さを素直に反映する（下の閾値を参照）。
+            // RAG 側の候補。**既定で有効**。無効にしたいときは `SEED_RAG=0`。
+            //
+            // 以前は既定 OFF にしていた（汎用語だけで候補が立ったため）が、原因は
+            // 類似度の足切りが無かったことだった。生のコサインで 0.04 未満を落とすと
+            // 無関係な質問は候補 0 件になり、`NOT_FOUND_SEED` も保たれる（実測）。
+            let rag_enabled = std::env::var("SEED_RAG").ok().as_deref() != Some("0");
             if rag_enabled && scored.len() < 5 {
                 let seeded: std::collections::HashSet<Uuid> =
                     scored.iter().map(|(id, ..)| *id).collect();
                 let mut rtx = self.store().begin_scoped(project).await?;
                 let tsquery = engine_rag::tsquery(&question);
-                let fallback: Result<(Vec<store::GraphEntityRow>, usize), store::StoreError> =
-                    async {
-                        if tsquery.is_empty() {
-                            return Ok((Vec::new(), 0));
-                        }
-                        let hits = self
-                            .store()
-                            .search_lexical(
-                                &mut rtx,
-                                project.0,
-                                &tsquery,
-                                &store::SearchFilter::default(),
-                                20,
-                            )
-                            .await?;
-                        let mut document_ids: Vec<Uuid> = Vec::new();
-                        for hit in &hits {
-                            if !document_ids.contains(&hit.document_id) {
-                                document_ids.push(hit.document_id);
-                            }
-                        }
-                        let entities = self
-                            .store()
-                            .graph_document_entities(&mut rtx, project.0, &document_ids)
-                            .await?;
-                        Ok((entities, document_ids.len()))
+                let fallback: Result<Vec<store::GraphEntityRow>, store::StoreError> = async {
+                    if tsquery.is_empty() {
+                        return Ok(Vec::new());
                     }
-                    .await;
+                    let hits = self
+                        .store()
+                        .search_lexical(
+                            &mut rtx,
+                            project.0,
+                            &tsquery,
+                            &store::SearchFilter::default(),
+                            20,
+                        )
+                        .await?;
+                    // `search_lexical` の score は ts_rank。実測（2026-11-19、100 chunk）:
+                    //   実質問 6.2 / 7.4、無関係な質問 1.4 / 1.6。
+                    // 4 倍の差があるので 3.0 で切る。コーパスや文書長が変わると
+                    // 効き方が変わる値なので、ここは**校正済みの定数**として扱い、
+                    // 変えるときは実測し直すこと。閾値が無いと、どんな質問でも
+                    // 文書が候補になり `NOT_FOUND_SEED` に到達しない。
+                    const MIN_SEED_RANK: f64 = 3.0;
+                    let kept = hits.iter().filter(|hit| hit.score >= MIN_SEED_RANK).count();
+                    tracing::debug!(hits = hits.len(), kept, "rag seed candidates");
+                    // ヒットした本文を繋いで、そこに**名前が出てくる実体**を拾う。
+                    // 文書そのものをシードにはしない — `Document` からはコードへ
+                    // 辿れず、影響が空のレポートが出るだけだった（2026-11-19 実測）。
+                    let corpus_text: String = hits
+                        .iter()
+                        .filter(|hit| hit.score >= MIN_SEED_RANK)
+                        .map(|hit| hit.quote.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                        .chars()
+                        .take(8_000)
+                        .collect();
+                    if corpus_text.is_empty() {
+                        return Ok(Vec::new());
+                    }
+                    let mentioned = self
+                        .store()
+                        .graph_entities_mentioned_in(&mut rtx, project.0, &corpus_text, 200)
+                        .await?;
+                    // Section / Document は文書の構造で、影響の起点にならない。
+                    Ok(mentioned
+                        .into_iter()
+                        .filter(|entity| {
+                            !matches!(entity.entity_type.as_str(), "Document" | "Section")
+                        })
+                        .collect())
+                }
+                .await;
                 store::commit(rtx).await?;
                 let entities = match fallback {
-                    Ok((entities, documents)) => {
-                        if entities.is_empty() && documents > 0 {
-                            // chunk は取れたが文書実体が無い = 投影が古い。
-                            // 静かに空にすると「RAG が効いていない」ことに気付けない。
-                            tracing::warn!(
-                                documents,
-                                "RAG のヒットに対応する Document 実体が無い（投影の更新が必要）"
-                            );
+                    Ok(entities) => {
+                        if entities.is_empty() {
+                            // 文書は取れたが、シードにできる実体が無い。
+                            // 「RAG が効いていない」ことに気付けるよう残す。
+                            tracing::debug!("RAG のヒットからシード実体を解決できず");
                         }
                         entities
                     }
@@ -569,7 +590,7 @@ impl App {
                         entity.natural_key.clone(),
                         entity.name.clone(),
                         0.55,
-                        "質問の語を含む関連文書（語彙検索）".to_string(),
+                        "質問に近い文書に名前が出てくる".to_string(),
                     ));
                 }
             }
