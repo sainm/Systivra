@@ -1,0 +1,10 @@
+[package]
+name = "engine-retrieval"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+contracts = { path = "../contracts" }
+domain = { path = "../domain" }
+serde_json = { workspace = true }
+uuid = { workspace = true }

@@ -116,6 +116,8 @@ use utoipa::OpenApi;
         crate::routes::inquiry::narrate_inquiry,
         crate::routes::inquiry::derive_inquiry_plan,
         crate::routes::knowledge::search,
+        crate::routes::retrieval::retrieval_query,
+        crate::routes::retrieval::list_runs,
         crate::routes::knowledge::retokenize,
         crate::routes::knowledge::embedding_models,
         crate::routes::knowledge::chunk,

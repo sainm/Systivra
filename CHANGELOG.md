@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026-11-20 — Retrieval Engine Phase 2（統一入口・戦略・trace）
+
+設計は `docs/retrieval-engine/design.md`。Phase 2 の最小切片だけを実装した。
+
+### Added
+
+- `POST /projects/{pid}/retrieval:query` と `GET …/retrieval-runs`。
+- `crates/engine-retrieval`（純ロジック・IO なし）: 戦略選択（規則）、
+  文書種別の語→`DocType`、トークン概算、コンテキスト詰め。単体 9 件。
+- `corpus.retrieval_run` / `corpus.retrieval_stage`（migration 035）。
+  既存の `retrieval_log` は `/search` 用にそのまま残す（用途が違う）。
+- `scripts/retrieval-eval.py`。
+
+### 設計上の判断（実装で確定したもの）
+
+- **検索は既存 `knowledge::search` に委譲**。並びが変わらないことを受入で固定した
+  （`same_order`）。新しい入口が検索の意味論を変えないための唯一の担保。
+- 未実装の戦略（CROSS_DOCUMENT 等）は**別物を返さない**。GLOBAL で実行し、
+  `degraded` に `strategy_not_implemented:*`、`strategy_reason` にも注記する。
+- 類似度下限は `/search` が持っていないので入口で落とし、
+  落とした件数を `below_similarity_threshold:N` として残す（黙って減らさない）。
+- `raw_scores` は融合後の値のみ。**経路ごとの生スコアは `/search` が外に出していない**
+  ため、偽の内訳を作らない（Phase 5 で `fuse` から返すよう改める）。
+
+### Verification
+
+- `scripts/retrieval-eval.py`:
+  `same_order=true` / 自動選択 GLOBAL / 未実装は明示 / DOCUMENT_LEVEL は実際に絞る
+  （この DB は BASIC_DESIGN のみなので 0 件）/ trace 2 段。
+- `cargo test`（engine-retrieval 9 件含む）/ `clippy -D warnings` / `openapi --check` /
+  `verify-db.sh`（035 込みで全通過）。
+
 ## 2026-11-19 — 全 UI 受入を通して状態を棚卸し
 
 `npm run check:ui:all` を追加。15 本を順に走らせ、**「落ちた」と「前提が無い」を

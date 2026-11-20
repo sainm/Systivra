@@ -85,6 +85,7 @@ pub fn router_with_oidc(
         .merge(routes::ai::router())
         .merge(routes::inquiry::router())
         .merge(routes::knowledge::router())
+        .merge(routes::retrieval::router())
         .merge(routes::job::router())
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),

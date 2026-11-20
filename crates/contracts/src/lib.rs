@@ -10,6 +10,7 @@ pub mod inquiry;
 pub mod job;
 pub mod knowledge;
 pub mod problem;
+pub mod retrieval;
 pub mod test;
 
 pub use ai::*;
@@ -28,4 +29,5 @@ pub use inquiry::*;
 pub use job::*;
 pub use knowledge::*;
 pub use problem::{FieldError, Problem};
+pub use retrieval::*;
 pub use test::*;

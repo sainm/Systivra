@@ -1414,6 +1414,40 @@ export interface paths {
         patch: operations["update_member_role"];
         trace?: never;
     };
+    "/api/v1/projects/{pid}/retrieval-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 実行記録の一覧（trace を見る入口）。 */
+        get: operations["list_runs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{pid}/retrieval:query": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 統一検索。戦略は指定も自動選択もできる。 */
+        post: operations["retrieval_query"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{pid}/test/artifacts:expire": {
         parameters: {
             query?: never;
@@ -2031,6 +2065,37 @@ export interface components {
             signature?: string | null;
             simple_name: string;
         };
+        ContextBlock: {
+            /**
+             * Format: int64
+             * @description 予算の都合で落とした件数（黙って減らさない）。
+             */
+            dropped: number;
+            entries?: components["schemas"]["ContextEntry"][];
+            /** @description 原文を連結したもの。要約や生成文は**入れない**。 */
+            text: string;
+            /** Format: int64 */
+            tokens: number;
+        };
+        ContextEntry: {
+            chunk_id: components["schemas"]["ChunkId"];
+            document_id: components["schemas"]["DocumentId"];
+            locator: unknown;
+            quote: string;
+            /** Format: double */
+            score: number;
+            title: string;
+            /** Format: int64 */
+            tokens: number;
+        };
+        ContextOptions: {
+            include_hierarchy?: boolean;
+            /**
+             * Format: int64
+             * @description 0 を渡すと既定（3000）に戻す。
+             */
+            token_limit?: number;
+        };
         CoverageDetail: {
             degraded?: string[];
             excluded: components["schemas"]["CoverageExcluded"];
@@ -2405,6 +2470,21 @@ export interface components {
         };
         GraphNeighborsResponse: {
             items: components["schemas"]["GraphNeighbor"][];
+        };
+        /** @description 图的扩展条件。Phase 2 では受け取るだけで未使用（trace に残す）。 */
+        GraphOptions: {
+            /**
+             * Format: int32
+             * @description 1〜3。範囲外は丸めて `degraded` に記録する。
+             */
+            depth?: number;
+            /** @description `OUT` / `IN` / `BOTH` */
+            direction?: string;
+            /** Format: int64 */
+            max_related?: number;
+            /** Format: float */
+            min_confidence?: number;
+            relationship_types?: string[];
         };
         GraphPathResponse: {
             nodes: components["schemas"]["GraphEntity"][];
@@ -3104,6 +3184,12 @@ export interface components {
             status: string;
             version: string;
         };
+        /** @description 1 本の召回経路の生スコア。融合後も**消さない**（説明可能性のため）。 */
+        RawScore: {
+            /** Format: double */
+            score: number;
+            source: string;
+        };
         RecomputeCoverageRequest: {
             /** Format: uuid */
             test_run_id: string;
@@ -3142,6 +3228,16 @@ export interface components {
             next: components["schemas"]["NextLinks"];
             revision: components["schemas"]["RevisionSummary"];
         };
+        RelationPath: {
+            /** Format: float */
+            confidence: number;
+            evidence_id?: null | components["schemas"]["EvidenceId"];
+            /** Format: uuid */
+            from: string;
+            relation: string;
+            /** Format: uuid */
+            to: string;
+        };
         /**
          * @description 既存 chunk の `tokenized` を作り直す保守操作の結果。
          *     `fts` は `tokenized` の生成列なので、更新すれば索引も追随する。
@@ -3153,6 +3249,97 @@ export interface components {
             remaining: number;
             /** @description 実際に値が変わった chunk 数。 */
             updated: number;
+        };
+        RetrievalRequest: {
+            /** @description 現状は `filters.business_domain` に写す（業務機能の実体は未実装）。 */
+            business_function_ids?: string[];
+            context?: components["schemas"]["ContextOptions"];
+            document_ids?: components["schemas"]["DocumentId"][];
+            document_types?: components["schemas"]["DocType"][];
+            filters?: components["schemas"]["SearchFilters"];
+            graph?: components["schemas"]["GraphOptions"];
+            query: string;
+            /** Format: float */
+            similarity_threshold?: number | null;
+            strategy?: null | components["schemas"]["RetrievalStrategy"];
+            /** Format: int64 */
+            top_k?: number;
+        };
+        RetrievalResponse: {
+            chunks: components["schemas"]["RetrievedChunk"][];
+            context: components["schemas"]["ContextBlock"];
+            degraded?: string[];
+            query: string;
+            relationships?: components["schemas"]["RelationPath"][];
+            /** Format: uuid */
+            retrieval_id: string;
+            selected_strategy: components["schemas"]["RetrievalStrategy"];
+            sources: components["schemas"]["SourceDocument"][];
+            stages: components["schemas"]["RetrievalStage"][];
+            stats: components["schemas"]["RetrievalStats"];
+            /** @description なぜその戦略になったか（自動選択の根拠）。 */
+            strategy_reason: string;
+        };
+        RetrievalRunListResponse: {
+            items: components["schemas"]["RetrievalRunSummary"][];
+        };
+        /** @description 実行記録の 1 行（管理画面用）。 */
+        RetrievalRunSummary: {
+            /** Format: date-time */
+            created_at: string;
+            degraded: string[];
+            /** Format: uuid */
+            id: string;
+            /** Format: int64 */
+            latency_ms: number;
+            query: string;
+            strategy: string;
+            strategy_reason: string;
+        };
+        RetrievalStage: {
+            /** Format: int64 */
+            candidates: number;
+            /** Format: int64 */
+            kept: number;
+            /** Format: int64 */
+            latency_ms: number;
+            /** Format: int32 */
+            seq: number;
+            stage: string;
+        };
+        RetrievalStats: {
+            /** Format: int64 */
+            candidates: number;
+            /** Format: int64 */
+            context_tokens: number;
+            /** Format: int64 */
+            latency_ms: number;
+            /** Format: int64 */
+            returned: number;
+        };
+        /**
+         * @description 检索策略。Phase 2 では GLOBAL と DOCUMENT_LEVEL のみ実装。
+         * @enum {string}
+         */
+        RetrievalStrategy: "GLOBAL" | "DOCUMENT_LEVEL" | "HIERARCHICAL" | "CROSS_DOCUMENT" | "HYBRID";
+        RetrievedChunk: {
+            chunk_id: components["schemas"]["ChunkId"];
+            document_id: components["schemas"]["DocumentId"];
+            evidence_id?: null | components["schemas"]["EvidenceId"];
+            locator: unknown;
+            node_path?: string[];
+            /** @description 原文。**書き換えない**。 */
+            quote: string;
+            raw_scores?: components["schemas"]["RawScore"][];
+            /** @description `vector` / `lexical` / `graph` / `hierarchy` */
+            recall_sources?: string[];
+            revision_id: components["schemas"]["RevisionId"];
+            /**
+             * Format: double
+             * @description 融合後のスコア（順序付けに使った値）。
+             */
+            score: number;
+            via?: null | components["schemas"]["RelationPath"];
         };
         /**
          * Format: uuid
@@ -3269,6 +3456,12 @@ export interface components {
             last_seen_at: string;
             provider?: string | null;
             user_agent?: string | null;
+        };
+        SourceDocument: {
+            doc_type: string;
+            id: components["schemas"]["DocumentId"];
+            revision_id: components["schemas"]["RevisionId"];
+            title: string;
         };
         SyncCodeRevisionRequest: {
             /** Format: date-time */
@@ -6560,6 +6753,80 @@ export interface operations {
                 };
             };
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_runs: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Project ID */
+                pid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetrievalRunListResponse"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    retrieval_query: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project ID */
+                pid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RetrievalRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetrievalResponse"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -17,6 +17,7 @@ pub mod knowledge;
 mod mcp_client;
 pub mod parse;
 pub mod report;
+pub mod retrieval;
 pub mod scim;
 pub mod test;
 

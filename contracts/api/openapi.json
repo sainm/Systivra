@@ -4645,6 +4645,121 @@
         }
       }
     },
+    "/api/v1/projects/{pid}/retrieval-runs": {
+      "get": {
+        "tags": [
+          "crate::routes::retrieval"
+        ],
+        "summary": "実行記録の一覧（trace を見る入口）。",
+        "operationId": "list_runs",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetrievalRunListResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{pid}/retrieval:query": {
+      "post": {
+        "tags": [
+          "crate::routes::retrieval"
+        ],
+        "summary": "統一検索。戦略は指定も自動選択もできる。",
+        "operationId": "retrieval_query",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetrievalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetrievalResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{pid}/test/artifacts:expire": {
       "post": {
         "tags": [
@@ -6675,6 +6790,83 @@
           }
         }
       },
+      "ContextBlock": {
+        "type": "object",
+        "required": [
+          "text",
+          "tokens",
+          "dropped"
+        ],
+        "properties": {
+          "dropped": {
+            "type": "integer",
+            "format": "int64",
+            "description": "予算の都合で落とした件数（黙って減らさない）。"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContextEntry"
+            }
+          },
+          "text": {
+            "type": "string",
+            "description": "原文を連結したもの。要約や生成文は**入れない**。"
+          },
+          "tokens": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ContextEntry": {
+        "type": "object",
+        "required": [
+          "chunk_id",
+          "document_id",
+          "title",
+          "locator",
+          "score",
+          "tokens",
+          "quote"
+        ],
+        "properties": {
+          "chunk_id": {
+            "$ref": "#/components/schemas/ChunkId"
+          },
+          "document_id": {
+            "$ref": "#/components/schemas/DocumentId"
+          },
+          "locator": {},
+          "quote": {
+            "type": "string"
+          },
+          "score": {
+            "type": "number",
+            "format": "double"
+          },
+          "title": {
+            "type": "string"
+          },
+          "tokens": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ContextOptions": {
+        "type": "object",
+        "properties": {
+          "include_hierarchy": {
+            "type": "boolean"
+          },
+          "token_limit": {
+            "type": "integer",
+            "format": "int64",
+            "description": "0 を渡すと既定（3000）に戻す。"
+          }
+        }
+      },
       "CoverageDetail": {
         "type": "object",
         "required": [
@@ -7918,6 +8110,35 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/GraphNeighbor"
+            }
+          }
+        }
+      },
+      "GraphOptions": {
+        "type": "object",
+        "description": "图的扩展条件。Phase 2 では受け取るだけで未使用（trace に残す）。",
+        "properties": {
+          "depth": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1〜3。範囲外は丸めて `degraded` に記録する。"
+          },
+          "direction": {
+            "type": "string",
+            "description": "`OUT` / `IN` / `BOTH`"
+          },
+          "max_related": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "min_confidence": {
+            "type": "number",
+            "format": "float"
+          },
+          "relationship_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
             }
           }
         }
@@ -10350,6 +10571,23 @@
           }
         }
       },
+      "RawScore": {
+        "type": "object",
+        "description": "1 本の召回経路の生スコア。融合後も**消さない**（説明可能性のため）。",
+        "required": [
+          "source",
+          "score"
+        ],
+        "properties": {
+          "score": {
+            "type": "number",
+            "format": "double"
+          },
+          "source": {
+            "type": "string"
+          }
+        }
+      },
       "RecomputeCoverageRequest": {
         "type": "object",
         "required": [
@@ -10492,6 +10730,42 @@
           }
         }
       },
+      "RelationPath": {
+        "type": "object",
+        "required": [
+          "from",
+          "to",
+          "relation",
+          "confidence"
+        ],
+        "properties": {
+          "confidence": {
+            "type": "number",
+            "format": "float"
+          },
+          "evidence_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/EvidenceId"
+              }
+            ]
+          },
+          "from": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "relation": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "RetokenizeResponse": {
         "type": "object",
         "description": "既存 chunk の `tokenized` を作り直す保守操作の結果。\n`fts` は `tokenized` の生成列なので、更新すれば索引も追随する。",
@@ -10515,6 +10789,330 @@
             "type": "integer",
             "description": "実際に値が変わった chunk 数。",
             "minimum": 0
+          }
+        }
+      },
+      "RetrievalRequest": {
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "business_function_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "現状は `filters.business_domain` に写す（業務機能の実体は未実装）。"
+          },
+          "context": {
+            "$ref": "#/components/schemas/ContextOptions"
+          },
+          "document_ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DocumentId"
+            }
+          },
+          "document_types": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DocType"
+            }
+          },
+          "filters": {
+            "$ref": "#/components/schemas/SearchFilters"
+          },
+          "graph": {
+            "$ref": "#/components/schemas/GraphOptions"
+          },
+          "query": {
+            "type": "string"
+          },
+          "similarity_threshold": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "strategy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RetrievalStrategy",
+                "description": "省略すると規則で自動選択し、`strategy_reason` に理由を残す。"
+              }
+            ]
+          },
+          "top_k": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "RetrievalResponse": {
+        "type": "object",
+        "required": [
+          "retrieval_id",
+          "query",
+          "selected_strategy",
+          "strategy_reason",
+          "chunks",
+          "sources",
+          "context",
+          "stages",
+          "stats"
+        ],
+        "properties": {
+          "chunks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RetrievedChunk"
+            }
+          },
+          "context": {
+            "$ref": "#/components/schemas/ContextBlock"
+          },
+          "degraded": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "query": {
+            "type": "string"
+          },
+          "relationships": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RelationPath"
+            }
+          },
+          "retrieval_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "selected_strategy": {
+            "$ref": "#/components/schemas/RetrievalStrategy"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceDocument"
+            }
+          },
+          "stages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RetrievalStage"
+            }
+          },
+          "stats": {
+            "$ref": "#/components/schemas/RetrievalStats"
+          },
+          "strategy_reason": {
+            "type": "string",
+            "description": "なぜその戦略になったか（自動選択の根拠）。"
+          }
+        }
+      },
+      "RetrievalRunListResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RetrievalRunSummary"
+            }
+          }
+        }
+      },
+      "RetrievalRunSummary": {
+        "type": "object",
+        "description": "実行記録の 1 行（管理画面用）。",
+        "required": [
+          "id",
+          "query",
+          "strategy",
+          "strategy_reason",
+          "latency_ms",
+          "degraded",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "degraded": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "latency_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "query": {
+            "type": "string"
+          },
+          "strategy": {
+            "type": "string"
+          },
+          "strategy_reason": {
+            "type": "string"
+          }
+        }
+      },
+      "RetrievalStage": {
+        "type": "object",
+        "required": [
+          "seq",
+          "stage",
+          "candidates",
+          "kept",
+          "latency_ms"
+        ],
+        "properties": {
+          "candidates": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "kept": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "latency_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "stage": {
+            "type": "string"
+          }
+        }
+      },
+      "RetrievalStats": {
+        "type": "object",
+        "required": [
+          "candidates",
+          "returned",
+          "context_tokens",
+          "latency_ms"
+        ],
+        "properties": {
+          "candidates": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "context_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "latency_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "returned": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "RetrievalStrategy": {
+        "type": "string",
+        "description": "检索策略。Phase 2 では GLOBAL と DOCUMENT_LEVEL のみ実装。",
+        "enum": [
+          "GLOBAL",
+          "DOCUMENT_LEVEL",
+          "HIERARCHICAL",
+          "CROSS_DOCUMENT",
+          "HYBRID"
+        ]
+      },
+      "RetrievedChunk": {
+        "type": "object",
+        "required": [
+          "chunk_id",
+          "document_id",
+          "revision_id",
+          "quote",
+          "locator",
+          "score"
+        ],
+        "properties": {
+          "chunk_id": {
+            "$ref": "#/components/schemas/ChunkId"
+          },
+          "document_id": {
+            "$ref": "#/components/schemas/DocumentId"
+          },
+          "evidence_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/EvidenceId"
+              }
+            ]
+          },
+          "locator": {},
+          "node_path": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "quote": {
+            "type": "string",
+            "description": "原文。**書き換えない**。"
+          },
+          "raw_scores": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RawScore"
+            }
+          },
+          "recall_sources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`vector` / `lexical` / `graph` / `hierarchy`"
+          },
+          "revision_id": {
+            "$ref": "#/components/schemas/RevisionId"
+          },
+          "score": {
+            "type": "number",
+            "format": "double",
+            "description": "融合後のスコア（順序付けに使った値）。"
+          },
+          "via": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RelationPath",
+                "description": "グラフ拡張で得た場合の経路。"
+              }
+            ]
           }
         }
       },
@@ -10904,6 +11502,29 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "SourceDocument": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "doc_type",
+          "revision_id"
+        ],
+        "properties": {
+          "doc_type": {
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/DocumentId"
+          },
+          "revision_id": {
+            "$ref": "#/components/schemas/RevisionId"
+          },
+          "title": {
+            "type": "string"
           }
         }
       },

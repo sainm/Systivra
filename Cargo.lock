@@ -149,6 +149,7 @@ dependencies = [
  "engine-graph",
  "engine-impact",
  "engine-rag",
+ "engine-retrieval",
  "engine-test",
  "pdf-extract",
  "printpdf",
@@ -1279,6 +1280,16 @@ dependencies = [
  "thiserror 2.0.21",
  "tracing",
  "unicode-normalization",
+ "uuid",
+]
+
+[[package]]
+name = "engine-retrieval"
+version = "0.1.0"
+dependencies = [
+ "contracts",
+ "domain",
+ "serde_json",
  "uuid",
 ]
 

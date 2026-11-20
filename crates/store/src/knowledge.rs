@@ -1100,3 +1100,121 @@ fn format_vector(values: &[f32]) -> String {
     out.push(']');
     out
 }
+
+/// Retrieval Engine の 1 回分の実行記録。
+#[derive(Debug, Clone)]
+pub struct RetrievalRunDraft {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub query: String,
+    pub strategy: String,
+    pub strategy_reason: String,
+    pub request: serde_json::Value,
+    pub response_stats: serde_json::Value,
+    pub degraded: Vec<String>,
+    pub latency_ms: i64,
+    pub created_by: Option<Uuid>,
+}
+
+/// 段階ごとの記録（trace）。
+#[derive(Debug, Clone)]
+pub struct RetrievalStageDraft {
+    pub seq: i32,
+    pub stage: String,
+    pub input_summary: serde_json::Value,
+    pub output_summary: serde_json::Value,
+    pub candidates: i64,
+    pub kept: i64,
+    pub latency_ms: i64,
+}
+
+/// 実行記録の一覧 1 行。
+#[derive(Debug, Clone)]
+pub struct RetrievalRunRow {
+    pub id: Uuid,
+    pub query: String,
+    pub strategy: String,
+    pub strategy_reason: String,
+    pub latency_ms: i64,
+    pub degraded: Vec<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl Store {
+    pub async fn insert_retrieval_run(
+        &self,
+        tx: &mut Tx<'_>,
+        run: &RetrievalRunDraft,
+        stages: &[RetrievalStageDraft],
+    ) -> Result<(), StoreError> {
+        sqlx::query(
+            "INSERT INTO corpus.retrieval_run
+               (id, project_id, query, strategy, strategy_reason, request,
+                response_stats, degraded, latency_ms, created_by)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        )
+        .bind(run.id)
+        .bind(run.project_id)
+        .bind(&run.query)
+        .bind(&run.strategy)
+        .bind(&run.strategy_reason)
+        .bind(&run.request)
+        .bind(&run.response_stats)
+        .bind(&run.degraded)
+        .bind(run.latency_ms as i32)
+        .bind(run.created_by)
+        .execute(&mut **tx)
+        .await?;
+
+        for stage in stages {
+            sqlx::query(
+                "INSERT INTO corpus.retrieval_stage
+                   (id, run_id, seq, stage, input_summary, output_summary,
+                    candidates, kept, latency_ms)
+                 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8)",
+            )
+            .bind(run.id)
+            .bind(stage.seq)
+            .bind(&stage.stage)
+            .bind(&stage.input_summary)
+            .bind(&stage.output_summary)
+            .bind(stage.candidates as i32)
+            .bind(stage.kept as i32)
+            .bind(stage.latency_ms as i32)
+            .execute(&mut **tx)
+            .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn retrieval_runs(
+        &self,
+        tx: &mut Tx<'_>,
+        project_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<RetrievalRunRow>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT id, query, strategy, strategy_reason, latency_ms, degraded, created_at
+               FROM corpus.retrieval_run
+              WHERE project_id = $1
+              ORDER BY created_at DESC
+              LIMIT $2",
+        )
+        .bind(project_id)
+        .bind(limit)
+        .fetch_all(&mut **tx)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|row| RetrievalRunRow {
+                id: row.get("id"),
+                query: row.get("query"),
+                strategy: row.get("strategy"),
+                strategy_reason: row.get("strategy_reason"),
+                latency_ms: i64::from(row.get::<i32, _>("latency_ms")),
+                degraded: row.get("degraded"),
+                created_at: row.get("created_at"),
+            })
+            .collect())
+    }
+}

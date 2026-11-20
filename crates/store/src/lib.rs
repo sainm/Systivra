@@ -49,7 +49,8 @@ pub use inquiry::{InquiryRow, NewInquiry};
 pub use job::{CancelOutcome, EnqueuedJob, JobCompletion, JobEvent, JobRow, NewJob};
 pub use knowledge::{
     ChunkDraft, ChunkListRow, ChunkRow, EvidenceDraft, EvidenceRow, IndexBuildRow, NodeDraft,
-    RetrievalLogDraft, SearchFilter, SearchHit, TreeNodeRow,
+    RetrievalLogDraft, RetrievalRunDraft, RetrievalRunRow, RetrievalStageDraft, SearchFilter,
+    SearchHit, TreeNodeRow,
 };
 pub use pool::{commit, Store, StoreError, Tx};
 pub use scim::{MemberRow, ScimGroupRow, ScimUserRow};

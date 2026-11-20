@@ -10,6 +10,7 @@ pub mod inquiry;
 pub mod job;
 pub mod knowledge;
 pub mod project;
+pub mod retrieval;
 pub mod scim;
 pub mod test;
 pub mod upload;
