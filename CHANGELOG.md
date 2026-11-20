@@ -1,5 +1,44 @@
 # Changelog
 
+## 2026-11-20 — Retrieval Engine Phase 3（跨文档检索）
+
+### Added
+
+- `corpus.chunk_relation`（migration 036）: Chunk 間の関係。粒度の約束は
+  「段落↔段落はここ、章↔章・章↔コードは graph_meta.relationship、文書内の階層は doc_node」。
+- `engine-retrieval`: `merge_expanded`（重複除去・スコア減衰・上限）。
+  落とした理由（重複 / 上限）を**数えて返す**。単体 4 件。
+- `app::retrieval`: `CROSS_DOCUMENT` を実装。2 経路を併用する:
+  1. `chunk_relation` の直結（人手・精密）
+  2. `chunk → SECTION → 実体 → 近傍 → 相手 SECTION の chunk`（既存の投影を利用）
+- `chunks_by_ids` / `chunk_sections` / `chunks_for_nodes`（store）。
+
+### 実装で分かったこと
+
+- **`chunk` は分割テーブルで主キーが `(id, project_id)`**。`REFERENCES chunk(id)` は
+  「一意制約が無い」で落ちる。FK は `(src_chunk_id, project_id)` の組で張る。
+- **chunk から doc_node への外部キーは存在しない**。`node_path` の末尾は
+  `SECTION:<ordinal>` という**表示ラベル**で、id ではない。解決は 2 経路:
+  `ordinal` の一致と `locator.page` の一致（PDF）。両方当たれば同じ節を指す。
+- 章レベルの図拡張は `Section.natural_key == doc_node.id` を利用（設計時に確認済み）。
+  コード・テストの実体は chunk を持たないので今回は辿らない（degraded にも出さない）。
+
+### Verification（`scripts/retrieval-eval.py`）
+
+```
+strict (min_confidence=0.5): relations=[IMPLEMENTS]        RELATED_TO(0.3) は除外
+loose  (0.2)               : relations=[IMPLEMENTS, RELATED_TO]
+max_related=1              : graph candidates=2 / kept=1 / degraded=[graph_truncated:1]
+未実装の HIERARCHICAL      : GLOBAL で実行 + strategy_not_implemented + 理由に注記
+```
+
+`clippy -D warnings` / `cargo test` / `openapi --check` / `verify-db.sh`（036 込み）全通過。
+
+### 未対応（意図的）
+
+- `chunk_relation` を作る API は無い（今は SQL 直接）。手動キュレーションの UI は Phase 5 以降。
+- 関係の自動抽出はしない（誤検出が「查不到」を「查错」に変えるため）。
+
 ## 2026-11-20 — Retrieval Engine Phase 2（統一入口・戦略・trace）
 
 設計は `docs/retrieval-engine/design.md`。Phase 2 の最小切片だけを実装した。

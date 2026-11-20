@@ -5,11 +5,11 @@
 //! グラフ拡張と階層拡張は Phase 3 / 4 で、この関数の中に段として足す。
 
 use contracts::{
-    ContextBlock, DocType, ErrorCode, RawScore, RetrievalRequest, RetrievalResponse,
+    ContextBlock, DocType, ErrorCode, RawScore, RelationPath, RetrievalRequest, RetrievalResponse,
     RetrievalRunListResponse, RetrievalRunSummary, RetrievalStage, RetrievalStats,
     RetrievalStrategy, RetrievedChunk, SearchFilters, SearchMode, SearchRequest, SourceDocument,
 };
-use domain::ProjectId;
+use domain::{ChunkId, DocumentId, EvidenceId, ProjectId, RevisionId};
 use uuid::Uuid;
 
 use crate::auth::Authenticated;
@@ -56,7 +56,9 @@ impl App {
         // 未実装の戦略は **黙って別物を返さず**、GLOBAL で実行した上で明示する。
         let mut strategy_reason = strategy_reason;
         let effective = match strategy {
-            RetrievalStrategy::Global | RetrievalStrategy::DocumentLevel => strategy,
+            RetrievalStrategy::Global
+            | RetrievalStrategy::DocumentLevel
+            | RetrievalStrategy::CrossDocument => strategy,
             other => {
                 degraded.push(format!("strategy_not_implemented:{}", other.as_str()));
                 // 理由と実行内容がずれると trace が読めない。必ず注記する。
@@ -143,6 +145,101 @@ impl App {
         }
         degraded.extend(search.degraded.iter().cloned());
 
+        // ── グラフ拡張（CROSS_DOCUMENT）
+        let mut relationships: Vec<RelationPath> = Vec::new();
+        let mut graph_stage: Option<RetrievalStage> = None;
+
+        if effective == RetrievalStrategy::CrossDocument {
+            let graph_started = std::time::Instant::now();
+            let (expanded, paths, dropped_limit, dropped_dup) = self
+                .expand_cross_document(project, &chunks, &req.graph)
+                .await?;
+            let seeds: Vec<(String, f64)> = chunks
+                .iter()
+                .take(5)
+                .map(|chunk| (chunk.chunk_id.0.to_string(), chunk.score))
+                .collect();
+            let candidates = expanded.len() as i64;
+            let outcome = engine_retrieval::merge_expanded(
+                &seeds,
+                expanded,
+                req.graph.max_related.max(1) as usize,
+                0.7,
+            );
+            let graph_dropped_by_limit = dropped_limit + outcome.dropped_by_limit as i64;
+            if graph_dropped_by_limit > 0 {
+                degraded.push(format!("graph_truncated:{graph_dropped_by_limit}"));
+            }
+            if dropped_dup > 0 || outcome.dropped_duplicate > 0 {
+                degraded.push(format!(
+                    "graph_duplicate_skipped:{}",
+                    dropped_dup + outcome.dropped_duplicate as i64
+                ));
+            }
+
+            let wanted: Vec<Uuid> = outcome
+                .kept
+                .iter()
+                .filter_map(|hit| Uuid::parse_str(&hit.chunk_id).ok())
+                .collect();
+            let mut tx = self.store().begin_scoped(project).await?;
+            let rows = self
+                .store()
+                .chunks_by_ids(&mut tx, project.0, &wanted)
+                .await?;
+            store::commit(tx).await?;
+            let mut added = 0i64;
+            for row in rows {
+                let Some(hit) = outcome
+                    .kept
+                    .iter()
+                    .find(|hit| hit.chunk_id == row.chunk_id.to_string())
+                else {
+                    continue;
+                };
+                relationships.push(RelationPath {
+                    from: Uuid::parse_str(&hit.from_chunk).unwrap_or_else(|_| Uuid::nil()),
+                    to: row.chunk_id,
+                    relation: hit.relation.clone(),
+                    confidence: hit.confidence as f32,
+                    evidence_id: paths
+                        .iter()
+                        .find(|path| path.to == row.chunk_id && path.relation == hit.relation)
+                        .and_then(|path| path.evidence_id),
+                });
+                chunks.push(RetrievedChunk {
+                    chunk_id: ChunkId(row.chunk_id),
+                    document_id: DocumentId(row.document_id),
+                    revision_id: RevisionId(row.revision_id),
+                    quote: row.quote,
+                    locator: row.locator,
+                    node_path: Vec::new(),
+                    score: row.score,
+                    raw_scores: vec![RawScore {
+                        source: "graph".into(),
+                        score: hit.confidence,
+                    }],
+                    recall_sources: vec!["graph".into()],
+                    evidence_id: row.evidence_id.map(EvidenceId),
+                    via: Some(RelationPath {
+                        from: Uuid::parse_str(&hit.from_chunk).unwrap_or_else(|_| Uuid::nil()),
+                        to: row.chunk_id,
+                        relation: hit.relation.clone(),
+                        confidence: hit.confidence as f32,
+                        evidence_id: None,
+                    }),
+                });
+                added += 1;
+            }
+            graph_stage = Some(RetrievalStage {
+                seq: 2,
+                stage: "graph".into(),
+                candidates,
+                kept: added,
+                latency_ms: graph_started.elapsed().as_millis() as i64,
+            });
+        }
+
         // ── コンテキスト（原文のみ。要約は入れない）
         let context_started = std::time::Instant::now();
         let inputs: Vec<engine_retrieval::ContextInput> = chunks
@@ -180,22 +277,23 @@ impl App {
         }
 
         let latency_ms = started.elapsed().as_millis() as i64;
-        let stages = vec![
-            RetrievalStage {
-                seq: 1,
-                stage: "search".into(),
-                candidates: search.total_candidates,
-                kept: search.results.len() as i64,
-                latency_ms: search_ms,
-            },
-            RetrievalStage {
-                seq: 2,
-                stage: "context".into(),
-                candidates: chunks.len() as i64,
-                kept: context.entries.len() as i64,
-                latency_ms: context_ms,
-            },
-        ];
+        let mut stages = vec![RetrievalStage {
+            seq: 1,
+            stage: "search".into(),
+            candidates: search.total_candidates,
+            kept: search.results.len() as i64,
+            latency_ms: search_ms,
+        }];
+        if let Some(stage) = graph_stage {
+            stages.push(stage);
+        }
+        stages.push(RetrievalStage {
+            seq: stages.len() as i32 + 1,
+            stage: "context".into(),
+            candidates: chunks.len() as i64,
+            kept: context.entries.len() as i64,
+            latency_ms: context_ms,
+        });
 
         let retrieval_id = Uuid::new_v4();
         let stats = RetrievalStats {
@@ -263,7 +361,7 @@ impl App {
             selected_strategy: effective,
             strategy_reason,
             chunks,
-            relationships: Vec::new(),
+            relationships,
             sources,
             context,
             stages,
@@ -306,5 +404,149 @@ impl App {
                 })
                 .collect(),
         })
+    }
+}
+
+impl App {
+    /// 跨文档扩展：chunk 之间的关系 + 章节级图关系。
+    ///
+    /// 2 経路を持つ理由: 段落レベルの引用は `chunk_relation`（精密・人手）、
+    /// 章レベルの派生/実装は `graph_meta.relationship`（既存の投影）。
+    /// どちらも **根拠のない自動推定はしない**。
+    #[allow(clippy::type_complexity)]
+    async fn expand_cross_document(
+        &self,
+        project: ProjectId,
+        chunks: &[RetrievedChunk],
+        graph: &contracts::GraphOptions,
+    ) -> Result<
+        (
+            Vec<engine_retrieval::ExpandedHit>,
+            Vec<contracts::RelationPath>,
+            i64,
+            i64,
+        ),
+        AppError,
+    > {
+        let seeds: Vec<Uuid> = chunks
+            .iter()
+            .take(5)
+            .map(|chunk| chunk.chunk_id.0)
+            .collect();
+        if seeds.is_empty() {
+            return Ok((Vec::new(), Vec::new(), 0, 0));
+        }
+        let direction = if graph.direction.is_empty() {
+            "BOTH"
+        } else {
+            graph.direction.as_str()
+        };
+        let mut expanded = Vec::new();
+        let mut paths: Vec<RelationPath> = Vec::new();
+        let mut dropped_dup = 0i64;
+
+        let mut tx = self.store().begin_scoped(project).await?;
+
+        // ── 経路 1: chunk 間の明示関係
+        let relations = self
+            .store()
+            .chunk_relations(
+                &mut tx,
+                store::ChunkRelationQuery {
+                    project_id: project.0,
+                    chunk_ids: &seeds,
+                    rel_types: &graph.relationship_types,
+                    direction,
+                    min_confidence: graph.min_confidence,
+                    limit: graph.max_related.max(1) * 2,
+                },
+            )
+            .await?;
+        for relation in &relations {
+            let (from, to) = if seeds.contains(&relation.src_chunk_id) {
+                (relation.src_chunk_id, relation.dst_chunk_id)
+            } else {
+                (relation.dst_chunk_id, relation.src_chunk_id)
+            };
+            expanded.push(engine_retrieval::ExpandedHit {
+                chunk_id: to.to_string(),
+                from_chunk: from.to_string(),
+                relation: relation.relation.clone(),
+                confidence: f64::from(relation.confidence),
+                hop: 1,
+            });
+            paths.push(RelationPath {
+                from,
+                to,
+                relation: relation.relation.clone(),
+                confidence: relation.confidence,
+                evidence_id: relation.evidence_id.map(EvidenceId),
+            });
+        }
+
+        // ── 経路 2: 章レベルの図（chunk → Section 実体 → 近傍 → chunk）
+        let sections = self.store().chunk_sections(&mut tx, &seeds).await?;
+        let mut node_ids: Vec<Uuid> = sections.iter().map(|section| section.node_id).collect();
+        node_ids.sort();
+        node_ids.dedup();
+        if !node_ids.is_empty() {
+            let keys: Vec<String> = node_ids.iter().map(|id| id.to_string()).collect();
+            let entities = self
+                .store()
+                .graph_entities_by_natural_keys(&mut tx, project.0, &["Section".to_string()], &keys)
+                .await?;
+            for entity in entities {
+                let neighbors = self
+                    .store()
+                    .graph_neighbors(
+                        &mut tx,
+                        project.0,
+                        entity.id,
+                        &graph.relationship_types,
+                        graph.max_related.max(1) * 2,
+                    )
+                    .await?;
+                for neighbor in neighbors {
+                    if neighbor.confidence < graph.min_confidence {
+                        continue;
+                    }
+                    // 章以外（コード・テスト）は chunk を持たないので今回は辿らない。
+                    if neighbor.entity.entity_type != "Section" {
+                        continue;
+                    }
+                    let Ok(target_node) = Uuid::parse_str(&neighbor.entity.natural_key) else {
+                        continue;
+                    };
+                    let rows = self
+                        .store()
+                        .chunks_for_nodes(&mut tx, project.0, &[target_node], 3)
+                        .await?;
+                    for row in rows {
+                        if seeds.contains(&row.chunk_id) {
+                            dropped_dup += 1;
+                            continue;
+                        }
+                        expanded.push(engine_retrieval::ExpandedHit {
+                            chunk_id: row.chunk_id.to_string(),
+                            from_chunk: entity.natural_key.clone(),
+                            relation: neighbor.rel_type.clone(),
+                            confidence: f64::from(neighbor.confidence),
+                            hop: 1,
+                        });
+                        paths.push(RelationPath {
+                            from: Uuid::parse_str(&entity.natural_key)
+                                .unwrap_or_else(|_| Uuid::nil()),
+                            to: row.chunk_id,
+                            relation: neighbor.rel_type.clone(),
+                            confidence: neighbor.confidence,
+                            evidence_id: None,
+                        });
+                    }
+                }
+            }
+        }
+
+        store::commit(tx).await?;
+        Ok((expanded, paths, 0, dropped_dup))
     }
 }

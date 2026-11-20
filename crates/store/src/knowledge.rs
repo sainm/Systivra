@@ -1218,3 +1218,249 @@ impl Store {
             .collect())
     }
 }
+
+/// 関係の登録内容。
+#[derive(Debug, Clone)]
+pub struct ChunkRelationDraft<'a> {
+    pub project_id: Uuid,
+    pub src: Uuid,
+    pub dst: Uuid,
+    pub relation: &'a str,
+    pub confidence: f32,
+    pub method: &'a str,
+    pub evidence_id: Option<Uuid>,
+    pub note: Option<&'a str>,
+}
+
+/// `chunk_relations` の引数（多いのでまとめる）。
+#[derive(Debug, Clone)]
+pub struct ChunkRelationQuery<'a> {
+    pub project_id: Uuid,
+    pub chunk_ids: &'a [Uuid],
+    pub rel_types: &'a [String],
+    /// `OUT` / `IN` / それ以外は両方向
+    pub direction: &'a str,
+    pub min_confidence: f32,
+    pub limit: i64,
+}
+
+/// Chunk 間の関係 1 行。
+#[derive(Debug, Clone)]
+pub struct ChunkRelationRow {
+    pub src_chunk_id: Uuid,
+    pub dst_chunk_id: Uuid,
+    pub relation: String,
+    pub confidence: f32,
+    pub method: String,
+    pub evidence_id: Option<Uuid>,
+}
+
+/// Chunk が属する SECTION ノード（doc_node.id）。chunk に外部キーは無いので、
+/// `node_path` の末尾 `SECTION:<ordinal>` と `locator.page` の 2 経路で解決する。
+#[derive(Debug, Clone)]
+pub struct ChunkSection {
+    pub chunk_id: Uuid,
+    pub node_id: uuid::Uuid,
+}
+
+impl Store {
+    /// 複数 chunk の関係をまとめて引く（N+1 を避ける）。
+    ///
+    /// `direction`: `OUT` は src→dst、`IN` は dst→src、それ以外は両方向。
+    pub async fn chunk_relations(
+        &self,
+        tx: &mut Tx<'_>,
+        query: ChunkRelationQuery<'_>,
+    ) -> Result<Vec<ChunkRelationRow>, StoreError> {
+        let ChunkRelationQuery {
+            project_id,
+            chunk_ids,
+            rel_types,
+            direction,
+            min_confidence,
+            limit,
+        } = query;
+        if chunk_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query(
+            "SELECT src_chunk_id, dst_chunk_id, relation, confidence, method, evidence_id
+               FROM corpus.chunk_relation
+              WHERE project_id = $1
+                AND confidence >= $4
+                AND ($3::text[] = '{}' OR relation = ANY($3))
+                AND CASE $5
+                      WHEN 'OUT' THEN src_chunk_id = ANY($2)
+                      WHEN 'IN'  THEN dst_chunk_id = ANY($2)
+                      ELSE src_chunk_id = ANY($2) OR dst_chunk_id = ANY($2)
+                    END
+              ORDER BY confidence DESC, relation
+              LIMIT $6",
+        )
+        .bind(project_id)
+        .bind(chunk_ids)
+        .bind(rel_types)
+        .bind(min_confidence)
+        .bind(direction)
+        .bind(limit)
+        .fetch_all(&mut **tx)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|row| ChunkRelationRow {
+                src_chunk_id: row.get("src_chunk_id"),
+                dst_chunk_id: row.get("dst_chunk_id"),
+                relation: row.get("relation"),
+                confidence: row.get("confidence"),
+                method: row.get("method"),
+                evidence_id: row.get("evidence_id"),
+            })
+            .collect())
+    }
+
+    /// 関係を登録する（Phase 3 では受入と手動登録のみ）。
+    pub async fn insert_chunk_relation(
+        &self,
+        tx: &mut Tx<'_>,
+        relation: ChunkRelationDraft<'_>,
+    ) -> Result<Uuid, StoreError> {
+        let ChunkRelationDraft {
+            project_id,
+            src,
+            dst,
+            relation,
+            confidence,
+            method,
+            evidence_id,
+            note,
+        } = relation;
+        let row = sqlx::query(
+            "INSERT INTO corpus.chunk_relation
+               (project_id, src_chunk_id, dst_chunk_id, relation, confidence, method,
+                evidence_id, note)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             ON CONFLICT (project_id, src_chunk_id, dst_chunk_id, relation)
+             DO UPDATE SET confidence = EXCLUDED.confidence,
+                           method = EXCLUDED.method,
+                           evidence_id = EXCLUDED.evidence_id,
+                           note = EXCLUDED.note
+             RETURNING id",
+        )
+        .bind(project_id)
+        .bind(src)
+        .bind(dst)
+        .bind(relation)
+        .bind(confidence)
+        .bind(method)
+        .bind(evidence_id)
+        .bind(note)
+        .fetch_one(&mut **tx)
+        .await?;
+        Ok(row.get("id"))
+    }
+
+    /// chunk → 所属 SECTION ノード。2 経路のうち当たった方を使う。
+    pub async fn chunk_sections(
+        &self,
+        tx: &mut Tx<'_>,
+        chunk_ids: &[Uuid],
+    ) -> Result<Vec<ChunkSection>, StoreError> {
+        if chunk_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query(
+            "SELECT c.id AS chunk_id, n.id AS node_id
+               FROM corpus.chunk c
+               JOIN corpus.doc_node n
+                 ON n.revision_id = c.revision_id
+                AND n.node_type = 'SECTION'
+                AND (
+                     -- 経路 1: node_path 末尾の SECTION:<ordinal>
+                     n.ordinal = NULLIF(regexp_replace(c.node_path[array_length(c.node_path, 1)],
+                                                       '^SECTION:', ''), '')::int
+                     -- 経路 2: locator.page の一致（PDF）
+                     OR (c.locator ? 'page'
+                         AND n.locator ? 'page'
+                         AND (n.locator->>'page')::int = (c.locator->>'page')::int)
+                   )
+              WHERE c.id = ANY($1)",
+        )
+        .bind(chunk_ids)
+        .fetch_all(&mut **tx)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|row| ChunkSection {
+                chunk_id: row.get("chunk_id"),
+                node_id: row.get("node_id"),
+            })
+            .collect())
+    }
+
+    /// id 指定で chunk を引く（関係から辿った先を読むため）。
+    pub async fn chunks_by_ids(
+        &self,
+        tx: &mut Tx<'_>,
+        project_id: Uuid,
+        chunk_ids: &[Uuid],
+    ) -> Result<Vec<SearchHit>, StoreError> {
+        if chunk_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query(
+            "SELECT c.id AS chunk_id, c.document_id, d.title AS document_title,
+                    d.doc_type, c.revision_id, r.source_revision, c.locator,
+                    left(c.text, 800) AS text, 0.0::float8 AS score,
+                    (SELECT e.id FROM corpus.evidence e WHERE e.chunk_id = c.id LIMIT 1) AS evidence_id
+               FROM corpus.chunk c
+               JOIN corpus.document d ON d.id = c.document_id
+               JOIN corpus.document_revision r ON r.id = c.revision_id
+              WHERE c.project_id = $1 AND c.is_current AND c.id = ANY($2)
+              ORDER BY c.ordinal",
+        )
+        .bind(project_id)
+        .bind(chunk_ids)
+        .fetch_all(&mut **tx)
+        .await?;
+        Ok(rows.iter().map(|row| search_hit(row, "graph")).collect())
+    }
+
+    /// 指定ノードに属する chunk（現在版のみ）。
+    pub async fn chunks_for_nodes(
+        &self,
+        tx: &mut Tx<'_>,
+        project_id: Uuid,
+        node_ids: &[Uuid],
+        limit: i64,
+    ) -> Result<Vec<SearchHit>, StoreError> {
+        if node_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query(
+            "SELECT c.id AS chunk_id, c.document_id, d.title AS document_title,
+                    d.doc_type, c.revision_id, r.source_revision, c.locator,
+                    left(c.text, 800) AS text, 0.0::float8 AS score,
+                    (SELECT e.id FROM corpus.evidence e WHERE e.chunk_id = c.id LIMIT 1) AS evidence_id
+               FROM corpus.chunk c
+               JOIN corpus.document d ON d.id = c.document_id
+               JOIN corpus.document_revision r ON r.id = c.revision_id
+               JOIN corpus.doc_node n ON n.id = ANY($2)
+              WHERE c.project_id = $1 AND c.is_current
+                AND n.revision_id = c.revision_id
+                AND (
+                     n.ordinal = NULLIF(regexp_replace(c.node_path[array_length(c.node_path, 1)],
+                                                       '^SECTION:', ''), '')::int
+                     OR (c.locator ? 'page' AND n.locator ? 'page'
+                         AND (n.locator->>'page')::int = (c.locator->>'page')::int)
+                   )
+              ORDER BY c.ordinal
+              LIMIT $3",
+        )
+        .bind(project_id)
+        .bind(node_ids)
+        .bind(limit)
+        .fetch_all(&mut **tx)
+        .await?;
+        Ok(rows.iter().map(|row| search_hit(row, "graph")).collect())
+    }
+}

@@ -283,3 +283,140 @@ mod tests {
         assert!(block.entries[0].score > 0.8);
     }
 }
+
+// ───────────────────────── グラフ拡張の統合（Phase 3）
+
+/// 拡張で見つかった候補。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExpandedHit {
+    pub chunk_id: String,
+    /// 拡張の起点になった chunk。
+    pub from_chunk: String,
+    pub relation: String,
+    /// 0..1。手動関係なら 1.0、規則推定なら低め。
+    pub confidence: f64,
+    /// 起点からのホップ数（1 以上）。
+    pub hop: u32,
+}
+
+/// 統合の結果。**落とした理由を数える**（黙って減らさない）。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MergeOutcome {
+    pub kept: Vec<ExpandedHit>,
+    pub dropped_duplicate: usize,
+    pub dropped_by_limit: usize,
+}
+
+/// 既に持っている chunk を除き、スコア順に上限まで採る。
+///
+/// スコアは `seed_score * decay^(hop-1) * confidence`。融合ではないので
+/// ベクトルの類似度と直接足さない（足すと根拠のない順位になる）。
+pub fn merge_expanded(
+    seeds: &[(String, f64)],
+    expanded: Vec<ExpandedHit>,
+    max_related: usize,
+    decay: f64,
+) -> MergeOutcome {
+    use std::collections::HashSet;
+
+    let seed_scores: std::collections::HashMap<&str, f64> = seeds
+        .iter()
+        .map(|(id, score)| (id.as_str(), *score))
+        .collect();
+    let mut seen: HashSet<String> = seeds.iter().map(|(id, _)| id.clone()).collect();
+
+    let mut scored: Vec<(f64, ExpandedHit)> = Vec::new();
+    let mut dropped_duplicate = 0usize;
+    for hit in expanded {
+        if seen.contains(&hit.chunk_id) {
+            dropped_duplicate += 1;
+            continue;
+        }
+        let seed_score = seed_scores
+            .get(hit.from_chunk.as_str())
+            .copied()
+            .unwrap_or(0.5);
+        let score = seed_score * decay.powi(hit.hop.saturating_sub(1) as i32) * hit.confidence;
+        seen.insert(hit.chunk_id.clone());
+        scored.push((score, hit));
+    }
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let total = scored.len();
+    let kept: Vec<ExpandedHit> = scored
+        .into_iter()
+        .take(max_related)
+        .map(|(_, hit)| hit)
+        .collect();
+    MergeOutcome {
+        kept,
+        dropped_duplicate,
+        dropped_by_limit: total.saturating_sub(max_related),
+    }
+}
+
+#[cfg(test)]
+mod graph_tests {
+    use super::*;
+
+    fn hit(id: &str, from: &str, confidence: f64, hop: u32) -> ExpandedHit {
+        ExpandedHit {
+            chunk_id: id.into(),
+            from_chunk: from.into(),
+            relation: "IMPLEMENTS".into(),
+            confidence,
+            hop,
+        }
+    }
+
+    #[test]
+    fn drops_items_already_in_the_base_results() {
+        let seeds = vec![("a".to_string(), 0.9)];
+        let outcome = merge_expanded(&seeds, vec![hit("a", "a", 1.0, 1)], 10, 0.7);
+        assert!(outcome.kept.is_empty());
+        assert_eq!(outcome.dropped_duplicate, 1);
+    }
+
+    #[test]
+    fn prefers_high_confidence_and_short_hops() {
+        let seeds = vec![("a".to_string(), 1.0)];
+        let outcome = merge_expanded(
+            &seeds,
+            vec![hit("far", "a", 1.0, 3), hit("near", "a", 0.6, 1)],
+            10,
+            0.5,
+        );
+        // near: 1.0*1*0.6 = 0.6 / far: 1.0*0.25*1.0 = 0.25
+        assert_eq!(outcome.kept[0].chunk_id, "near");
+    }
+
+    #[test]
+    fn counts_what_the_limit_dropped() {
+        let seeds = vec![("a".to_string(), 1.0)];
+        let outcome = merge_expanded(
+            &seeds,
+            vec![
+                hit("x", "a", 1.0, 1),
+                hit("y", "a", 0.9, 1),
+                hit("z", "a", 0.8, 1),
+            ],
+            2,
+            0.7,
+        );
+        assert_eq!(outcome.kept.len(), 2);
+        assert_eq!(outcome.dropped_by_limit, 1);
+    }
+
+    #[test]
+    fn dedupes_duplicates_within_the_expansion() {
+        let seeds = vec![("a".to_string(), 1.0)];
+        let outcome = merge_expanded(
+            &seeds,
+            vec![hit("x", "a", 1.0, 1), hit("x", "a", 0.9, 1)],
+            10,
+            0.7,
+        );
+        assert_eq!(outcome.kept.len(), 1);
+        assert_eq!(outcome.dropped_duplicate, 1);
+    }
+}

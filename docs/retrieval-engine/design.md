@@ -525,7 +525,7 @@ CREATE TABLE corpus.retrieval_stage (
 |---|---|---|
 | 1 | 本文档 + 现状复核 | 表/字段/代码位置逐条对上；与本节不符处更新 |
 | 2 | 契约 + GLOBAL + Metadata + 去重 + Trace | ✅ **已实现**（2026-11-20）：`scripts/retrieval-eval.py` 验证同序、策略、未实现标记、trace 两表 |
-| 3 | 图扩展（章节级）+ `chunk_relation` + 跨文档 | 造 2 条关系后能召回对侧 chunk，且带路径与置信度 |
+| 3 | 图扩展（章节级）+ `chunk_relation` + 跨文档 | ✅ **已实现**（2026-11-20）：置信度过滤、上限截断标记、`via` 路径均验证 |
 | 4 | 层级检索 | 命中→上/下/同级扩展开关生效；截断写 degraded |
 | 5 | Hybrid + Reranker trait | 权重可配；单测覆盖融合顺序；rrf/minmax 可切换 |
 | 6 | MCP Adapter | 6 个 tool 可被发现；MCP 进程无 store 依赖 |
